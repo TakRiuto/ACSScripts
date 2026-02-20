@@ -8,7 +8,7 @@
 // @run-at       document-start
 // @author       Ing. Adrian Leon
 // @updateURL    https://raw.githubusercontent.com/TakRiuto/ACSScripts/refs/heads/main/Monitor.user.js
-// @downloadURL  https://raw.githubusercontent.com/TakRiuto/ACSScripts/refs/heads/main/Monitor..user.js
+// @downloadURL  https://raw.githubusercontent.com/TakRiuto/ACSScripts/refs/heads/main/Monitor.user.js
 // ==/UserScript==
 
 (function() {
