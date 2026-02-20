@@ -5,6 +5,8 @@
 // @grant       none
 // @version     27.0
 // @author      Ing. Adrian Leon
+// @updateURL    https://raw.githubusercontent.com/TakRiuto/ACSScripts/main/MultiONT.user.js
+// @downloadURL  https://raw.githubusercontent.com/TakRiuto/ACSScripts/main/MultiONT.user.js
 // ==/UserScript==
 
 (function() {
