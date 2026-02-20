@@ -7,6 +7,8 @@
 // @inject-into  content
 // @run-at       document-start
 // @author       Ing. Adrian Leon
+// @updateURL    https://raw.githubusercontent.com/TakRiuto/ACSScripts/refs/heads/main/Monitor.js
+// @downloadURL  https://raw.githubusercontent.com/TakRiuto/ACSScripts/refs/heads/main/Monitor.js
 // ==/UserScript==
 
 (function() {
