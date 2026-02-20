@@ -6,7 +6,7 @@ Multiple tools for monitoring under InCa
 - **[Tampermonkey](https://tampermonkey.net)** _(CLOSED SOURCE)_
 - **[Violentmonkey](https://violentmonkey.github.io)** _(OPEN SOURCE)_
 
-1. Choose and install the script of your choice:
+2. Choose and install the script of your choice:
 
 | Script | Deploy |
 | :--- | :--- |
