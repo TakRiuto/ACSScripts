@@ -8,7 +8,7 @@ Multiple tools for monitoring under InCa
 
 1. Choose and install the script of your choice:
 
-| Script |
+| Script | Acción |
 | :--- | :--- |
 | **Monitor OLT** | [![Install](https://img.shields.io/badge/Instalar-Monitor-green?style=flat-square&logo=tampermonkey)](https://raw.githubusercontent.com/TakRiuto/ACSScripts/main/Monitor.user.js) |
 | **Multi ONT** | [![Install](https://img.shields.io/badge/Instalar-MultiONT-green?style=flat-square&logo=tampermonkey)](https://raw.githubusercontent.com/TakRiuto/ACSScripts/main/MultiONT.user.js) |
