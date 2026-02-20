@@ -10,9 +10,9 @@ Multiple tools for monitoring under InCa
 
 | Script | Deploy |
 | :--- | :--- |
-| **Monitor OLT** | [![Install](https://img.shields.io/badge/Instalar-Monitor-green?style=flat-square&logo=tampermonkey)](https://raw.githubusercontent.com/TakRiuto/ACSScripts/main/Monitor.user.js) |
-| **Multi ONT** | [![Install](https://img.shields.io/badge/Instalar-MultiONT-green?style=flat-square&logo=tampermonkey)](https://raw.githubusercontent.com/TakRiuto/ACSScripts/main/MultiONT.user.js) |
-| **Multi TODO** | [![Install](https://img.shields.io/badge/Instalar-MultiTODO-green?style=flat-square&logo=tampermonkey)](https://raw.githubusercontent.com/TakRiuto/ACSScripts/main/MultiTODO.user.js) |
+| **Monitor OLT** | [![Install](https://img.shields.io/badge/Install-Monitor-green?style=flat-square&logo=tampermonkey)](https://raw.githubusercontent.com/TakRiuto/ACSScripts/main/Monitor.user.js) |
+| **Multi ONT** | [![Install](https://img.shields.io/badge/Install-MultiONT-green?style=flat-square&logo=tampermonkey)](https://raw.githubusercontent.com/TakRiuto/ACSScripts/main/MultiONT.user.js) |
+| **Multi TODO** | [![Install](https://img.shields.io/badge/Install-MultiTODO-green?style=flat-square&logo=tampermonkey)](https://raw.githubusercontent.com/TakRiuto/ACSScripts/main/MultiTODO.user.js) |
 
 3. Open InCa and test.
 
