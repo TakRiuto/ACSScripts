@@ -7,7 +7,12 @@ Multiple tools for monitoring under InCa
 - **[Violentmonkey](https://violentmonkey.github.io)** _(OPEN SOURCE)_
 
 1. Choose and install the script of your choice:
-    >   **[Auto-Monitor with Alarm](Monitor.user.js?raw=true)** userscript.
+
+| Script | Acción |
+| :--- | :--- |
+| **Monitor OLT** | [![Instalar](https://img.shields.io/badge/Instalar-Monitor-orange?style=flat-square&logo=tampermonkey)](https://raw.githubusercontent.com/TakRiuto/ACSScripts/main/Monitor.user.js) |
+| **Multi ONT** | [![Instalar](https://img.shields.io/badge/Instalar-MultiONT-orange?style=flat-square&logo=tampermonkey)](https://raw.githubusercontent.com/TakRiuto/ACSScripts/main/MultiONT.user.js) |
+| **Multi TODO** | [![Instalar](https://img.shields.io/badge/Instalar-MultiTODO-orange?style=flat-square&logo=tampermonkey)](https://raw.githubusercontent.com/TakRiuto/ACSScripts/main/MultiTODO.user.js) |
 
 3. Visit [store.steampowered.com](https://store.steampowered.com/app/218620) or [steamdb.info](https://steamdb.info/app/218620) and look for the button at the bottom right!
 
