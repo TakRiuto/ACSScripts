@@ -7,7 +7,7 @@ Multiple tools for monitoring under InCa
 - **[Violentmonkey](https://violentmonkey.github.io)** _(OPEN SOURCE)_
 
 1. Choose and install the script of your choice:
-    >   **[Auto-Monitor with Alarm](dist/refs/heads/main/Monitor.js?raw=true)** userscript.
+    >   **[Auto-Monitor with Alarm](/main/Monitor.js?raw=true)** userscript.
 
 3. Visit [store.steampowered.com](https://store.steampowered.com/app/218620) or [steamdb.info](https://steamdb.info/app/218620) and look for the button at the bottom right!
 
