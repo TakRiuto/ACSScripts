@@ -2,7 +2,7 @@
 // @name         OLT Monitor Maestro
 // @namespace    Violentmonkey Scripts
 // @match        *://190.153.58.82/monitoring/olt/*
-// @version      8.5
+// @version      8.6
 // @inject-into  content
 // @run-at       document-end
 // @author       Ing. Adrian Leon
@@ -123,7 +123,6 @@
             <div id="panel-header" style="cursor:pointer; font-weight:bold; border-bottom:1px solid #ed5565; margin-bottom:10px; padding-bottom:5px; font-size:13px; color:#ed5565; display:flex; justify-content:space-between; align-items:center;">
                 <span id="header-text">🚨 <span id="alert-count" style="background:#ed5565; color:white; border-radius:10px; padding:0 8px; font-size:11px;">0</span></span>
                 <div style="display:flex; align-items:center; gap:6px;">
-                    <button id="btn-marcar-todos" title="Marcar todos como vistos" style="display:none; background:#1ab394; border:none; color:white; font-size:10px; font-weight:bold; padding:2px 7px; border-radius:4px; cursor:pointer;">✔ Visto</button>
                     <span id="toggle-btn" style="font-size:16px;">+</span>
                 </div>
             </div>
@@ -137,6 +136,7 @@
                         </select>
                         <input type="number" id="umbral-valor" class="control-umbral" style="width: 55px; text-align:center;" min="1" max="999">
                     </div>
+                    <button id="btn-marcar-todos" style="display:none; width:100%; background:#1ab394; border:none; color:white; font-size:11px; font-weight:bold; padding:5px 0; border-radius:4px; cursor:pointer;">✔ Marcar todos como vistos</button>
                 </div>
                 <div id="alert-list" style="max-height:410px; overflow-y:auto; scrollbar-width: thin; font-family: 'Consolas', monospace;"></div>
             </div>
