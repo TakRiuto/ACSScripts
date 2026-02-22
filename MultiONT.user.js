@@ -3,7 +3,7 @@
 // @namespace   Violentmonkey Scripts
 // @match       *://190.153.58.82/fttx/locate-ont*
 // @grant       none
-// @version     27.0
+// @version     1.3
 // @author      Ing. Adrian Leon
 // @updateURL    https://raw.githubusercontent.com/TakRiuto/ACSScripts/main/MultiONT.user.js
 // @downloadURL  https://raw.githubusercontent.com/TakRiuto/ACSScripts/main/MultiONT.user.js
