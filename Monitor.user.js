@@ -2,7 +2,6 @@
 // @name         OLT Monitor Maestro
 // @namespace    Violentmonkey Scripts
 // @match        *://190.153.58.82/monitoring/olt/*
-// @grant        none
 // @version      8.1
 // @inject-into  content
 // @run-at       document-start
