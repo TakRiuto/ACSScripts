@@ -3,7 +3,7 @@
 // @namespace    Violentmonkey Scripts
 // @match        *://190.153.58.82/monitoring/olt/*
 // @grant        none
-// @version      38.1
+// @version      8.1
 // @inject-into  content
 // @run-at       document-start
 // @author       Ing. Adrian Leon
@@ -2703,14 +2703,14 @@
         "TURHUB21614A": { op: "Sin Asignar", zona: "" },
         "TURHUB21615A": { op: "Sin Asignar", zona: "" },
     };
-    let oltActual = ""; 
+    let oltActual = "";
     let modoCargaInicial = true;
     let panelAbiertoAt = 0;
-    
+
     // Variables de configuración de alarma con persistencia
-    let umbralValor = parseFloat(localStorage.getItem('oltUmbralValor')) || 30; 
+    let umbralValor = parseFloat(localStorage.getItem('oltUmbralValor')) || 30;
     let umbralTipo = localStorage.getItem('oltUmbralTipo') || 'porcentaje';
-    
+
     const registroNodos = new Map();
     const TIEMPO_LECTURA_MS = 30000;
     const sonidoAlerta = new Audio('http://soundbible.com/grab.php?id=2214&type=mp3');
@@ -2737,10 +2737,10 @@
             margin-left: 8px !important; box-shadow: 0 0 8px #fff;
         }
         .header-blink { animation: pulsePanel 0.4s infinite alternate !important; box-shadow: 0 0 15px #ed5565 !important; }
-        
+
         .control-umbral {
-            background: #222; color: #ed5565; border: 1px solid #555; 
-            border-radius: 3px; padding: 3px 5px; font-size: 11px; 
+            background: #222; color: #ed5565; border: 1px solid #555;
+            border-radius: 3px; padding: 3px 5px; font-size: 11px;
             font-weight: bold; cursor: pointer; outline: none; box-sizing: border-box;
         }
         .control-umbral:hover, .control-umbral:focus { border-color: #ed5565; }
@@ -2792,10 +2792,10 @@
         const actualizarConfiguracion = () => {
             umbralValor = parseFloat(inputValor.value) || 0;
             umbralTipo = selectTipo.value;
-            
+
             localStorage.setItem('oltUmbralValor', umbralValor);
             localStorage.setItem('oltUmbralTipo', umbralTipo);
-            
+
             modoCargaInicial = true;
             registroNodos.clear();
         };
@@ -2857,6 +2857,20 @@
                     if (umbralTipo === 'porcentaje' && pDown >= umbralValor) superaUmbral = true;
                     if (umbralTipo === 'cantidad' && off >= umbralValor) superaUmbral = true;
 
+                    // --- LIMPIEZA DEL DOM: Captura de etiquetas y ocultación de residuos ---
+                    const etiquetas = celdaPort.querySelectorAll('.gpon-util .label');
+                    let labelPrincipal = null;
+
+                    if (etiquetas.length > 0) {
+                        labelPrincipal = etiquetas[0];
+                        labelPrincipal.innerHTML = `<div style="line-height:1.1;"><b style="font-size:11px;">${pDown}% DN</b><br><span style="font-size:9px;">${pUp}% UP</span></div>`;
+
+                        // Ocultar la etiqueta "N/A" o cualquier otra residual
+                        for (let i = 1; i < etiquetas.length; i++) {
+                            etiquetas[i].style.display = 'none';
+                        }
+                    }
+
                     if (superaUmbral) {
                         if (!registroNodos.has(idNodo)) {
                             registroNodos.set(idNodo, {
@@ -2876,19 +2890,13 @@
 
                         const esNuevoParaPanel = (data.origen === 'nuevo' && !data.reconocido);
 
-                        // --- MODIFICADO: CONTROL INTELIGENTE DEL TABLERO ACS ---
-                        const label = celdaPort.querySelector('.gpon-util .label');
-                        if (label) {
-                            label.innerHTML = `<div style="line-height:1.1;"><b style="font-size:11px;">${pDown}% DN</b><br><span style="font-size:9px;">${pUp}% UP</span></div>`;
-                            
+                        if (labelPrincipal) {
                             if (esNuevoParaPanel) {
-                                // ES NUEVO: Parpadea para llamar tu atención
-                                label.className = "label celda-acs-blink";
-                                label.style.cssText = `display:inline-block!important;width:68px!important;color:white!important;border-radius:4px;text-align:center;`;
+                                labelPrincipal.className = "label celda-acs-blink";
+                                labelPrincipal.style.cssText = `display:inline-block!important;width:68px!important;color:white!important;border-radius:4px;text-align:center;`;
                             } else {
-                                // YA RECONOCIDO O CARGA INICIAL: Se queda en rojo oscuro fijo
-                                label.className = "label";
-                                label.style.cssText = `display:inline-block!important;width:68px!important;background-color:#a93226!important;color:white!important;border-radius:4px;text-align:center; border:1px solid rgba(255,255,255,0.1);`;
+                                labelPrincipal.className = "label";
+                                labelPrincipal.style.cssText = `display:inline-block!important;width:68px!important;background-color:#a93226!important;color:white!important;border-radius:4px;text-align:center; border:1px solid rgba(255,255,255,0.1);`;
                             }
                         }
 
@@ -2898,24 +2906,22 @@
                             esNuevoParaPanel: esNuevoParaPanel
                         });
                     } else {
-                        const label = celdaPort.querySelector('.gpon-util .label');
-                        if (label) {
-                            label.innerHTML = `<div style="line-height:1.1;"><b style="font-size:11px;">${pDown}% DN</b><br><span style="font-size:9px;">${pUp}% UP</span></div>`;
-                            label.className = "label";
-                            label.style.cssText = `display:inline-block!important;width:68px!important;background-color:#1ab394!important;color:white!important;border-radius:4px;text-align:center;`;
+                        if (labelPrincipal) {
+                            labelPrincipal.className = "label";
+                            labelPrincipal.style.cssText = `display:inline-block!important;width:68px!important;background-color:#1ab394!important;color:white!important;border-radius:4px;text-align:center;`;
                         }
                     }
                 }
             }
         });
-        
+
         if (hayNovedadesParaAlarma) reproducirAlerta();
 
         const idsActivos = new Set(criticosActuales.map(c => c.id));
         for (let id of registroNodos.keys()) { if (!idsActivos.has(id)) registroNodos.delete(id); }
 
         modoCargaInicial = false;
-        
+
         const badgeContador = document.getElementById('alert-count');
         const hayAlgoSinLeer = criticosActuales.some(c => c.esNuevoParaPanel);
         badgeContador.innerText = criticosActuales.length;
