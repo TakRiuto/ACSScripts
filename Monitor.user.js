@@ -2,9 +2,9 @@
 // @name         OLT Monitor Maestro
 // @namespace    Violentmonkey Scripts
 // @match        *://190.153.58.82/monitoring/olt/*
-// @version      8.1
+// @version      8.2
 // @inject-into  content
-// @run-at       document-start
+// @run-at       document-end
 // @author       Ing. Adrian Leon
 // @updateURL    https://raw.githubusercontent.com/TakRiuto/ACSScripts/main/Monitor.user.js
 // @downloadURL  https://raw.githubusercontent.com/TakRiuto/ACSScripts/main/Monitor.user.js
@@ -14,14 +14,27 @@
 
 (async function() {
     'use strict';
-    const DB_NODOS = await fetch(
-        'https://raw.githubusercontent.com/TakRiuto/ACSScripts/main/nodos.json'
-    ).then(r => r.json());
+
+    // --- CARGA DB ---
+    let DB_NODOS = {};
+    try {
+        DB_NODOS = await fetch(
+            'https://raw.githubusercontent.com/TakRiuto/ACSScripts/main/nodos.json'
+        ).then(r => {
+            if (!r.ok) throw new Error(`HTTP ${r.status}`);
+            return r.json();
+        });
+        console.log('✅ DB_NODOS cargado:', Object.keys(DB_NODOS).length, 'nodos');
+    } catch(e) {
+        console.error('❌ Error cargando nodos.json:', e);
+    }
+
+    // --- ESTADO ---
     let oltActual = "";
     let modoCargaInicial = true;
     let panelAbiertoAt = 0;
+    let filasCache = null; // Cache de filas DOM
 
-    // Variables de configuración de alarma con persistencia
     let umbralValor = parseFloat(localStorage.getItem('oltUmbralValor')) || 30;
     let umbralTipo = localStorage.getItem('oltUmbralTipo') || 'porcentaje';
 
@@ -29,7 +42,7 @@
     const TIEMPO_LECTURA_MS = 30000;
     const sonidoAlerta = new Audio('http://soundbible.com/grab.php?id=2214&type=mp3');
 
-    // CSS - ANIMACIONES ACS, PANEL E INPUTS
+    // --- CSS ---
     const style = document.createElement('style');
     style.innerHTML = `
         @keyframes pulseACS {
@@ -51,7 +64,6 @@
             margin-left: 8px !important; box-shadow: 0 0 8px #fff;
         }
         .header-blink { animation: pulsePanel 0.4s infinite alternate !important; box-shadow: 0 0 15px #ed5565 !important; }
-
         .control-umbral {
             background: #222; color: #ed5565; border: 1px solid #555;
             border-radius: 3px; padding: 3px 5px; font-size: 11px;
@@ -60,12 +72,9 @@
         .control-umbral:hover, .control-umbral:focus { border-color: #ed5565; }
         input[type=number]::-webkit-inner-spin-button { opacity: 1; }
     `;
-    document.head.appendChild(style);
+    (document.head || document.documentElement).appendChild(style);
 
-    function reproducirAlerta() {
-        sonidoAlerta.play().catch(() => {});
-    }
-
+    // --- PANEL ---
     function crearPanel() {
         if (document.getElementById('olt-alert-panel')) return;
         const panel = document.createElement('div');
@@ -99,18 +108,16 @@
 
         const inputValor = document.getElementById('umbral-valor');
         const selectTipo = document.getElementById('umbral-tipo');
-
         inputValor.value = umbralValor;
         selectTipo.value = umbralTipo;
 
         const actualizarConfiguracion = () => {
             umbralValor = parseFloat(inputValor.value) || 0;
             umbralTipo = selectTipo.value;
-
             localStorage.setItem('oltUmbralValor', umbralValor);
             localStorage.setItem('oltUmbralTipo', umbralTipo);
-
             modoCargaInicial = true;
+            filasCache = null; // Invalida cache al cambiar configuración
             registroNodos.clear();
         };
 
@@ -119,31 +126,33 @@
 
         document.getElementById('panel-header').onclick = function() {
             const content = document.getElementById('alert-content');
-            if (content.style.display === 'none') {
-                content.style.display = 'block'; document.getElementById('olt-alert-panel').style.width = '260px';
-                document.getElementById('toggle-btn').innerText = '−';
-                panelAbiertoAt = Date.now();
-            } else {
-                content.style.display = 'none'; document.getElementById('olt-alert-panel').style.width = '100px';
-                document.getElementById('toggle-btn').innerText = '+';
-                panelAbiertoAt = 0;
-            }
+            const abriendo = content.style.display === 'none';
+            content.style.display = abriendo ? 'block' : 'none';
+            document.getElementById('olt-alert-panel').style.width = abriendo ? '260px' : '100px';
+            document.getElementById('toggle-btn').innerText = abriendo ? '−' : '+';
+            panelAbiertoAt = abriendo ? Date.now() : 0;
         };
     }
 
+    // --- LOOP PRINCIPAL ---
     function procesarNodos() {
         if (!window.location.href.includes('/monitoring/olt/')) return;
         crearPanel();
 
         const oltName = document.querySelector('.olt-monitoring-details-olt-title')?.innerText.trim() || "OLT";
 
+        // Si cambia la OLT, invalidar todo el cache
         if (oltName !== oltActual) {
             oltActual = oltName;
             modoCargaInicial = true;
+            filasCache = null;
             registroNodos.clear();
         }
 
-        const filas = document.querySelectorAll('tr');
+        // Usar cache de filas si existe, si no, escanear y cachear
+        const filas = filasCache || document.querySelectorAll('tr');
+        if (!filasCache) filasCache = filas;
+
         const criticosActuales = [];
         const ahora = Date.now();
         let hayNovedadesParaAlarma = false;
@@ -161,90 +170,78 @@
                 const on = parseInt(celdaPort.querySelector('.label-green')?.innerText) || 0;
                 const off = parseInt(celdaPort.querySelector('.label-danger')?.innerText) || 0;
                 const total = on + off;
+                if (total === 0) continue;
 
-                if (total > 0) {
-                    const pDown = ((off / total) * 100).toFixed(1);
-                    const pUp = ((on / total) * 100).toFixed(1);
-                    const idNodo = `${oltName}${slotStr}${pIdx.toString().padStart(2, '0')}A`;
+                const pDown = ((off / total) * 100).toFixed(1);
+                const pUp = ((on / total) * 100).toFixed(1);
+                const idNodo = `${oltName}${slotStr}${pIdx.toString().padStart(2, '0')}A`;
 
-                    let superaUmbral = false;
-                    if (umbralTipo === 'porcentaje' && pDown >= umbralValor) superaUmbral = true;
-                    if (umbralTipo === 'cantidad' && off >= umbralValor) superaUmbral = true;
+                const superaUmbral = umbralTipo === 'porcentaje' ? pDown >= umbralValor : off >= umbralValor;
 
-                    // --- LIMPIEZA DEL DOM: Captura de etiquetas y ocultación de residuos ---
-                    const etiquetas = celdaPort.querySelectorAll('.gpon-util .label');
-                    let labelPrincipal = null;
+                const etiquetas = celdaPort.querySelectorAll('.gpon-util .label');
+                let labelPrincipal = null;
 
-                    if (etiquetas.length > 0) {
-                        labelPrincipal = etiquetas[0];
-                        labelPrincipal.innerHTML = `<div style="line-height:1.1;"><b style="font-size:11px;">${pDown}% DN</b><br><span style="font-size:9px;">${pUp}% UP</span></div>`;
+                if (etiquetas.length > 0) {
+                    labelPrincipal = etiquetas[0];
+                    labelPrincipal.innerHTML = `<div style="line-height:1.1;"><b style="font-size:11px;">${pDown}% DN</b><br><span style="font-size:9px;">${pUp}% UP</span></div>`;
+                    for (let i = 1; i < etiquetas.length; i++) etiquetas[i].style.display = 'none';
+                }
 
-                        // Ocultar la etiqueta "N/A" o cualquier otra residual
-                        for (let i = 1; i < etiquetas.length; i++) {
-                            etiquetas[i].style.display = 'none';
+                if (superaUmbral) {
+                    if (!registroNodos.has(idNodo)) {
+                        registroNodos.set(idNodo, {
+                            origen: modoCargaInicial ? 'inicial' : 'nuevo',
+                            reconocido: modoCargaInicial,
+                            timestamp: ahora
+                        });
+                        if (!modoCargaInicial) hayNovedadesParaAlarma = true;
+                    }
+
+                    const data = registroNodos.get(idNodo);
+                    if (panelAbiertoAt > 0 && (ahora - panelAbiertoAt) > TIEMPO_LECTURA_MS) data.reconocido = true;
+
+                    const esNuevoParaPanel = (data.origen === 'nuevo' && !data.reconocido);
+
+                    if (labelPrincipal) {
+                        if (esNuevoParaPanel) {
+                            labelPrincipal.className = "label celda-acs-blink";
+                            labelPrincipal.style.cssText = `display:inline-block!important;width:68px!important;color:white!important;border-radius:4px;text-align:center;`;
+                        } else {
+                            labelPrincipal.className = "label";
+                            labelPrincipal.style.cssText = `display:inline-block!important;width:68px!important;background-color:#a93226!important;color:white!important;border-radius:4px;text-align:center;border:1px solid rgba(255,255,255,0.1);`;
                         }
                     }
 
-                    if (superaUmbral) {
-                        if (!registroNodos.has(idNodo)) {
-                            registroNodos.set(idNodo, {
-                                origen: modoCargaInicial ? 'inicial' : 'nuevo',
-                                reconocido: modoCargaInicial,
-                                timestamp: ahora
-                            });
+                    const info = DB_NODOS[idNodo] || { op: "---", zona: "S/I" };
+                    criticosActuales.push({ id: idNodo, down: pDown, off, ...info, esNuevoParaPanel });
 
-                            if (!modoCargaInicial) hayNovedadesParaAlarma = true;
-                        }
-
-                        const data = registroNodos.get(idNodo);
-
-                        if (panelAbiertoAt > 0 && (ahora - panelAbiertoAt) > TIEMPO_LECTURA_MS) {
-                            data.reconocido = true;
-                        }
-
-                        const esNuevoParaPanel = (data.origen === 'nuevo' && !data.reconocido);
-
-                        if (labelPrincipal) {
-                            if (esNuevoParaPanel) {
-                                labelPrincipal.className = "label celda-acs-blink";
-                                labelPrincipal.style.cssText = `display:inline-block!important;width:68px!important;color:white!important;border-radius:4px;text-align:center;`;
-                            } else {
-                                labelPrincipal.className = "label";
-                                labelPrincipal.style.cssText = `display:inline-block!important;width:68px!important;background-color:#a93226!important;color:white!important;border-radius:4px;text-align:center; border:1px solid rgba(255,255,255,0.1);`;
-                            }
-                        }
-
-                        const info = DB_NODOS[idNodo] || { op: "---", zona: "S/I" };
-                        criticosActuales.push({
-                            id: idNodo, down: pDown, off: off, ...info,
-                            esNuevoParaPanel: esNuevoParaPanel
-                        });
-                    } else {
-                        if (labelPrincipal) {
-                            labelPrincipal.className = "label";
-                            labelPrincipal.style.cssText = `display:inline-block!important;width:68px!important;background-color:#1ab394!important;color:white!important;border-radius:4px;text-align:center;`;
-                        }
+                } else {
+                    if (labelPrincipal) {
+                        labelPrincipal.className = "label";
+                        labelPrincipal.style.cssText = `display:inline-block!important;width:68px!important;background-color:#1ab394!important;color:white!important;border-radius:4px;text-align:center;`;
                     }
                 }
             }
         });
 
-        if (hayNovedadesParaAlarma) reproducirAlerta();
+        if (hayNovedadesParaAlarma) sonidoAlerta.play().catch(() => {});
 
+        // Limpiar nodos que ya no están activos
         const idsActivos = new Set(criticosActuales.map(c => c.id));
         for (let id of registroNodos.keys()) { if (!idsActivos.has(id)) registroNodos.delete(id); }
 
         modoCargaInicial = false;
 
+        // Actualizar badge
         const badgeContador = document.getElementById('alert-count');
         const hayAlgoSinLeer = criticosActuales.some(c => c.esNuevoParaPanel);
         badgeContador.innerText = criticosActuales.length;
-        if (hayAlgoSinLeer) badgeContador.classList.add('header-blink');
-        else badgeContador.classList.remove('header-blink');
+        hayAlgoSinLeer ? badgeContador.classList.add('header-blink') : badgeContador.classList.remove('header-blink');
 
+        // Actualizar lista solo si el contenido cambió
         const listContainer = document.getElementById('alert-list');
         if (listContainer) {
-            listContainer.innerHTML = criticosActuales.length > 0
+            const nuevoHTML = criticosActuales.length > 0
                 ? criticosActuales.map(c => `
                     <div class="${c.esNuevoParaPanel ? 'tarjeta-panel-blink' : ''}" style="margin-bottom:12px; padding:10px; border-left:5px solid #ed5565; background:rgba(237,85,101,0.1); border-radius:0 5px 5px 0;">
                         <div style="display:flex; align-items:center; justify-content:space-between;">
@@ -257,6 +254,8 @@
                         </div>
                     </div>`).join('')
                 : '<div style="color:#1ab394; text-align:center; padding:20px; font-weight:bold;">SISTEMA OK ✅</div>';
+
+            if (listContainer.innerHTML !== nuevoHTML) listContainer.innerHTML = nuevoHTML;
         }
     }
 
