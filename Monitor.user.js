@@ -3,7 +3,7 @@
 // @namespace    Violentmonkey Scripts
 // @match        *://190.153.58.82/monitoring/olt/*
 // @grant        none
-// @version      35.0
+// @version      38.0
 // @inject-into  content
 // @run-at       document-start
 // @author       Ing. Adrian Leon
@@ -2706,11 +2706,16 @@
     let oltActual = "";
     let modoCargaInicial = true;
     let panelAbiertoAt = 0;
+
+    // Variables de configuración de alarma con persistencia
+    let umbralValor = parseFloat(localStorage.getItem('oltUmbralValor')) || 30;
+    let umbralTipo = localStorage.getItem('oltUmbralTipo') || 'porcentaje'; // 'porcentaje' o 'cantidad'
+
     const registroNodos = new Map();
     const TIEMPO_LECTURA_MS = 30000;
     const sonidoAlerta = new Audio('http://soundbible.com/grab.php?id=2214&type=mp3');
 
-    // 2. CSS - ANIMACIONES ACS Y PANEL
+    // CSS - ANIMACIONES ACS, PANEL E INPUTS
     const style = document.createElement('style');
     style.innerHTML = `
         @keyframes pulseACS {
@@ -2732,6 +2737,14 @@
             margin-left: 8px !important; box-shadow: 0 0 8px #fff;
         }
         .header-blink { animation: pulsePanel 0.4s infinite alternate !important; box-shadow: 0 0 15px #ed5565 !important; }
+
+        .control-umbral {
+            background: #222; color: #ed5565; border: 1px solid #555;
+            border-radius: 3px; padding: 3px 5px; font-size: 11px;
+            font-weight: bold; cursor: pointer; outline: none; box-sizing: border-box;
+        }
+        .control-umbral:hover, .control-umbral:focus { border-color: #ed5565; }
+        input[type=number]::-webkit-inner-spin-button { opacity: 1; }
     `;
     document.head.appendChild(style);
 
@@ -2749,7 +2762,17 @@
                 <span id="toggle-btn" style="font-size:16px;">+</span>
             </div>
             <div id="alert-content" style="display: none;">
-                <div id="alert-list" style="max-height:450px; overflow-y:auto; scrollbar-width: thin; font-family: 'Consolas', monospace;"></div>
+                <div style="background: rgba(255,255,255,0.05); padding: 8px; margin-bottom: 10px; border-radius: 4px; display:flex; flex-direction:column; gap:6px;">
+                    <span style="font-size:10px; color:#aaa; font-weight:bold;">TIPO DE ALARMA:</span>
+                    <div style="display:flex; justify-content:space-between; gap: 5px;">
+                        <select id="umbral-tipo" class="control-umbral" style="flex: 1;">
+                            <option value="porcentaje">Porcentaje Caido (%)</option>
+                            <option value="cantidad">Cant. Caídos</option>
+                        </select>
+                        <input type="number" id="umbral-valor" class="control-umbral" style="width: 55px; text-align:center;" min="1" max="999">
+                    </div>
+                </div>
+                <div id="alert-list" style="max-height:410px; overflow-y:auto; scrollbar-width: thin; font-family: 'Consolas', monospace;"></div>
             </div>
         `;
         Object.assign(panel.style, {
@@ -2759,6 +2782,28 @@
             border: '1px solid #444', borderLeft: 'none', transition: 'width 0.2s ease'
         });
         document.body.appendChild(panel);
+
+        // Configuración de los controles
+        const inputValor = document.getElementById('umbral-valor');
+        const selectTipo = document.getElementById('umbral-tipo');
+
+        inputValor.value = umbralValor;
+        selectTipo.value = umbralTipo;
+
+        const actualizarConfiguracion = () => {
+            umbralValor = parseFloat(inputValor.value) || 0;
+            umbralTipo = selectTipo.value;
+
+            localStorage.setItem('oltUmbralValor', umbralValor);
+            localStorage.setItem('oltUmbralTipo', umbralTipo);
+
+            // Reinicio limpio para aplicar el nuevo filtro
+            modoCargaInicial = true;
+            registroNodos.clear();
+        };
+
+        inputValor.addEventListener('change', actualizarConfiguracion);
+        selectTipo.addEventListener('change', actualizarConfiguracion);
 
         document.getElementById('panel-header').onclick = function() {
             const content = document.getElementById('alert-content');
@@ -2810,7 +2855,12 @@
                     const pUp = ((on / total) * 100).toFixed(1);
                     const idNodo = `${oltName}${slotStr}${pIdx.toString().padStart(2, '0')}A`;
 
-                    if (pDown >= 30) {
+                    // LÓGICA DE EVALUACIÓN DINÁMICA
+                    let superaUmbral = false;
+                    if (umbralTipo === 'porcentaje' && pDown >= umbralValor) superaUmbral = true;
+                    if (umbralTipo === 'cantidad' && off >= umbralValor) superaUmbral = true;
+
+                    if (superaUmbral) {
                         if (!registroNodos.has(idNodo)) {
                             registroNodos.set(idNodo, {
                                 origen: modoCargaInicial ? 'inicial' : 'nuevo',
@@ -2827,7 +2877,6 @@
                             data.reconocido = true;
                         }
 
-                        // REGLA 1: PARPADEO EN ACS (Siempre si es crítico, sea inicial o nuevo)
                         const label = celdaPort.querySelector('.gpon-util .label');
                         if (label) {
                             label.innerHTML = `<div style="line-height:1.1;"><b style="font-size:11px;">${pDown}% DN</b><br><span style="font-size:9px;">${pUp}% UP</span></div>`;
@@ -2835,14 +2884,12 @@
                             label.style.cssText = `display:inline-block!important;width:68px!important;color:white!important;border-radius:4px;text-align:center;`;
                         }
 
-                        // REGLA 2: LÓGICA DE NUESTRO PANEL
                         const info = DB_NODOS[idNodo] || { op: "---", zona: "S/I" };
                         criticosActuales.push({
-                            id: idNodo, down: pDown, ...info,
+                            id: idNodo, down: pDown, off: off, ...info,
                             esNuevoParaPanel: (data.origen === 'nuevo' && !data.reconocido)
                         });
                     } else {
-                        // Formateo normal para nodos OK
                         const label = celdaPort.querySelector('.gpon-util .label');
                         if (label) {
                             label.innerHTML = `<div style="line-height:1.1;"><b style="font-size:11px;">${pDown}% DN</b><br><span style="font-size:9px;">${pUp}% UP</span></div>`;
@@ -2853,12 +2900,14 @@
                 }
             }
         });
+
         if (hayNovedadesParaAlarma) reproducirAlerta();
 
         const idsActivos = new Set(criticosActuales.map(c => c.id));
         for (let id of registroNodos.keys()) { if (!idsActivos.has(id)) registroNodos.delete(id); }
 
         modoCargaInicial = false;
+
         const badgeContador = document.getElementById('alert-count');
         const hayAlgoSinLeer = criticosActuales.some(c => c.esNuevoParaPanel);
         badgeContador.innerText = criticosActuales.length;
@@ -2875,9 +2924,11 @@
                             ${c.esNuevoParaPanel ? '<span class="badge-nuevo">NUEVO</span>' : ''}
                         </div>
                         <div style="font-size:11px; color:#ddd; margin: 3px 0;">📍 ${c.zona} | 🏢 ${c.op}</div>
-                        <div style="margin-top:6px; color:#ed5565; font-size:12px; font-weight:bold;">⚠️ CAÍDA: ${c.down}%</div>
+                        <div style="margin-top:6px; color:#ed5565; font-size:12px; font-weight:bold;">
+                            ⚠️ CAÍDA: ${c.down}% | 🔴 OFF: ${c.off}
+                        </div>
                     </div>`).join('')
-                : '<div style="color:#1ab394; text-align:center; padding:20px; font-weight:bold;">SISTEMA OK ✅</div>';
+                : '<div style="color:#1ab394; text-align:center; padding:20px; font-weight:bold;">SIN PROBKLEMAS ✅</div>';
         }
     }
 
