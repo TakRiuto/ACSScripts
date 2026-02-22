@@ -5,7 +5,6 @@
 // @grant        none
 // @version      12.1
 // @author       Ing. Adrian Leon
-// @description  Escaneo inteligente usando el div .pace para detectar carga
 // @updateURL    https://raw.githubusercontent.com/TakRiuto/ACSScripts/main/MultiTODO.user.js
 // @downloadURL  https://raw.githubusercontent.com/TakRiuto/ACSScripts/main/MultiTODO.user.js
 // ==/UserScript==
