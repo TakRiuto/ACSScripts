@@ -2,7 +2,7 @@
 // @name         OLT Monitor Maestro
 // @namespace    Violentmonkey Scripts
 // @match        *://190.153.58.82/monitoring/olt/*
-// @version      8.2
+// @version      8.3
 // @inject-into  content
 // @run-at       document-end
 // @author       Ing. Adrian Leon
@@ -19,7 +19,7 @@
     let DB_NODOS = {};
     try {
         DB_NODOS = await fetch(
-            'https://raw.githubusercontent.com/TakRiuto/ACSScripts/main/nodos.json'
+            'https://raw.githubusercontent.com/TakRiuto/ACSScripts/refs/heads/main/nodos.json'
         ).then(r => {
             if (!r.ok) throw new Error(`HTTP ${r.status}`);
             return r.json();
@@ -41,6 +41,46 @@
     const registroNodos = new Map();
     const TIEMPO_LECTURA_MS = 30000;
     const sonidoAlerta = new Audio('http://soundbible.com/grab.php?id=2214&type=mp3');
+
+    // --- FAVICON DINÁMICO ---
+    let faviconEl = document.querySelector("link[rel~='icon']");
+    if (!faviconEl) {
+        faviconEl = document.createElement('link');
+        faviconEl.rel = 'icon';
+        document.head.appendChild(faviconEl);
+    }
+    const faviconCanvas = document.createElement('canvas');
+    faviconCanvas.width = 32;
+    faviconCanvas.height = 32;
+    const faviconCtx = faviconCanvas.getContext('2d');
+
+    function actualizarPestana(oltName, totalCriticos, hayNuevos) {
+        // Título dinámico
+        document.title = totalCriticos > 0
+            ? `${hayNuevos ? '🆕' : '🔴'} (${totalCriticos}) ${oltName}`
+            : `✅ ${oltName}`;
+
+        // Favicon: círculo coloreado con número o check
+        const color = totalCriticos > 0 ? (hayNuevos ? '#e74c3c' : '#a93226') : '#1ab394';
+        faviconCtx.clearRect(0, 0, 32, 32);
+        faviconCtx.beginPath();
+        faviconCtx.arc(16, 16, 15, 0, 2 * Math.PI);
+        faviconCtx.fillStyle = color;
+        faviconCtx.fill();
+
+        faviconCtx.fillStyle = '#ffffff';
+        faviconCtx.textAlign = 'center';
+        faviconCtx.textBaseline = 'middle';
+        if (totalCriticos > 0) {
+            faviconCtx.font = `bold ${totalCriticos > 9 ? '14' : '18'}px sans-serif`;
+            faviconCtx.fillText(totalCriticos > 99 ? '99+' : totalCriticos, 16, 17);
+        } else {
+            faviconCtx.font = 'bold 20px sans-serif';
+            faviconCtx.fillText('✓', 16, 17);
+        }
+
+        faviconEl.href = faviconCanvas.toDataURL('image/png');
+    }
 
     // --- CSS ---
     const style = document.createElement('style');
@@ -257,6 +297,9 @@
 
             if (listContainer.innerHTML !== nuevoHTML) listContainer.innerHTML = nuevoHTML;
         }
+
+        // Actualizar título y favicon de la pestaña
+        actualizarPestana(oltActual, criticosActuales.length, hayAlgoSinLeer);
     }
 
     setInterval(procesarNodos, 2500);
