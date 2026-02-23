@@ -2,7 +2,7 @@
 // @name         OLT Monitor Maestro
 // @namespace    Violentmonkey Scripts
 // @match        *://190.153.58.82/monitoring/olt/*
-// @version      10.4
+// @version      10.5
 // @inject-into  content
 // @run-at       document-end
 // @author       Ing. Adrian Leon
@@ -123,7 +123,7 @@
                 detalle = `Estaba OFF: ${e.datos.off} (${e.datos.pDown}%)`;
 
             return `
-                <div style="margin-bottom:8px; padding:8px; border-left:4px solid ${colores[e.tipo]}; background:rgba(255,255,255,0.03); border-radius:0 4px 4px 0;">
+                <div style="margin-bottom:8px; padding:8px; border-left:4px solid ${colores[e.tipo]}; background:rgba(255,255,255,0.05); border-radius:0 4px 4px 0;">
                     <div style="display:flex; justify-content:space-between; align-items:center;">
                         <span style="color:${colores[e.tipo]}; font-size: clamp(10px, 0.8vw, 12px); font-weight:bold;">${iconos[e.tipo]} ${labels[e.tipo]}</span>
                         <span style="color:#666; font-size: clamp(8px, 0.7vw, 10px);">${e.ts}</span>
@@ -345,7 +345,7 @@
             registroNodos.clear();
         }
 
-        // Escanear filas directamente — tabla máx 15x16, costo negligible
+// Escanear filas directamente
         const filas = document.querySelectorAll('tr');
 
         const criticosActuales = [];
@@ -354,13 +354,27 @@
 
         filas.forEach(fila => {
             const celdas = fila.querySelectorAll('td');
-            if (celdas.length < 17) return;
-            const slotStr = celdas[0].innerText.trim().padStart(2, '0');
+            if (celdas.length < 2) return; // Omitir si no tiene al menos Slot y un dato
+
+            // Extraer el número de Slot leyendo específicamente la etiqueta <strong> para evitar texto duplicado
+            const slotStrong = celdas[0].querySelector('strong');
+            if (!slotStrong) return;
+
+            const slotStr = slotStrong.innerText.trim().padStart(2, '0');
             if (!/^\d+$/.test(slotStr)) return;
 
-            for (let pIdx = 0; pIdx < 16; pIdx++) {
-                const celdaPort = celdas[pIdx + 1];
-                if (!celdaPort) continue;
+            // Iterar dinámicamente buscando celdas que sean puertos, sin importar su posición
+            for (let i = 1; i < celdas.length; i++) {
+                const celdaPort = celdas[i];
+
+                // Buscar el identificador de puerto dentro de la celda ("Port 0", "Port 1", etc.)
+                const tituloPuerto = celdaPort.querySelector('.table-cell-head strong')?.innerText.trim() || '';
+                const matchPuerto = tituloPuerto.match(/^Port\s+(\d+)$/i);
+
+                // Si la celda no dice "Port X" (por ejemplo, es la columna "Total"), la ignoramos
+                if (!matchPuerto) continue;
+
+                const portStr = matchPuerto[1].padStart(2, '0');
 
                 const on = parseInt(celdaPort.querySelector('.label-green')?.innerText) || 0;
                 const off = parseInt(celdaPort.querySelector('.label-danger')?.innerText) || 0;
@@ -369,7 +383,9 @@
 
                 const pDown = ((off / total) * 100).toFixed(1);
                 const pUp = ((on / total) * 100).toFixed(1);
-                const idNodo = `${oltName}${slotStr}${pIdx.toString().padStart(2, '0')}A`;
+
+                // Generar ID Dinámico basado en el texto leído, no en la posición de la columna
+                const idNodo = `${oltName}${slotStr}${portStr}A`;
 
                 const superaUmbral = umbralTipo === 'porcentaje' ? pDown >= umbralValor : off >= umbralValor;
 
@@ -424,7 +440,7 @@
                             labelPrincipal.style.cssText = `display:inline-block!important;width:68px!important;color:white!important;border-radius:4px;text-align:center;`;
                         } else {
                             labelPrincipal.className = "label";
-                            labelPrincipal.style.cssText = `display:inline-block!important;width:68px!important;background-color:#a93226!important;color:white!important;border-radius:4px;text-align:center;border:1px solid rgba(255,255,255,0.1);`;
+                            labelPrincipal.style.cssText = `display:inline-block!important;width:68px!important;background-color:#a93226!important;color:white!important;border-radius:4px;text-align:center;border:1px solid rgba(255,255,255,0.05);`;
                         }
                     }
 
@@ -496,7 +512,7 @@
         if (listContainer) {
             const nuevoHTML = criticosFiltrados.length > 0
                 ? criticosFiltrados.map(c => `
-                    <div class="${c.esNuevoParaPanel ? 'tarjeta-panel-blink' : ''}" style="margin-bottom:12px; padding:10px; border-left:5px solid #ed5565; background:rgba(255,255,255,0.03); border-radius:0 5px 5px 0;">
+                    <div class="${c.esNuevoParaPanel ? 'tarjeta-panel-blink' : ''}" style="margin-bottom:12px; padding:10px; border-left:5px solid #ed5565; background:rgba(255,255,255,0.05); border-radius:0 5px 5px 0;">
                         <div style="display:flex; align-items:center; justify-content:space-between;">
                             <span style="color:#1ab394; font-weight:900; font-size: clamp(13px, 1.2vw, 18px); letter-spacing:0.5px;">${c.id}</span>
                             ${c.esNuevoParaPanel ? '<span class="badge-nuevo">NUEVO</span>' : ''}
