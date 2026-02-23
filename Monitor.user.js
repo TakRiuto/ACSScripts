@@ -2,7 +2,7 @@
 // @name         OLT Monitor Maestro
 // @namespace    Violentmonkey Scripts
 // @match        *://190.153.58.82/monitoring/olt/*
-// @version      9.6
+// @version      9.7
 // @inject-into  content
 // @run-at       document-end
 // @author       Ing. Adrian Leon
@@ -45,14 +45,20 @@
     let audioAutorizado = false;
     document.addEventListener('click', () => {
         if (!audioAutorizado) {
-            sonidoAlerta.play().then(() => {
-                sonidoAlerta.pause();
-                sonidoAlerta.currentTime = 0;
-                audioAutorizado = true;
-                console.log('✅ Motor de audio autorizado por el navegador.');
-            }).catch(() => {});
-    }
-}, { once: true });
+            audioAutorizado = true;
+            
+            // Solo hacemos el ciclo rápido de play/pause si la alarma NO está sonando
+            if (sonidoAlerta.paused) {
+                sonidoAlerta.play().then(() => {
+                    sonidoAlerta.pause();
+                    sonidoAlerta.currentTime = 0;
+                    console.log('✅ Motor de audio autorizado silenciosamente.');
+                }).catch(() => {});
+            } else {
+                console.log('✅ Motor de audio autorizado (la alarma ya estaba activa).');
+            }
+        }
+    }, { once: true });
 
     // Bucle de sonido: al terminar, se relanza si no está silenciado
     sonidoAlerta.addEventListener('ended', () => {
