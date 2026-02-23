@@ -2,7 +2,7 @@
 // @name         OLT Monitor Maestro
 // @namespace    Violentmonkey Scripts
 // @match        *://190.153.58.82/monitoring/olt/*
-// @version      11.4
+// @version      11.5
 // @inject-into  content
 // @run-at       document-end
 // @author       Ing. Adrian Leon
@@ -99,6 +99,63 @@
         const a = document.createElement('a');
         a.href = URL.createObjectURL(blob);
         a.download = `log_${oltActual}_${new Date().toISOString().slice(0,10)}.txt`;
+        a.click();
+    }
+
+    function exportarCSV() {
+        // Etiquetas de estado legibles
+        const ESTATUS = {
+            inicial:     'INICIO',
+            nueva_alarma:'ALARMA',
+            empeora:     'EMPEORA',
+            recuperado:  'RECUPERADO'
+        };
+
+        const encabezado = ['Fecha','Hora','OLT','Nodo','Ubicacion','Operadora','Estatus','Clientes Caidos','Clientes Caidos Antes','Clientes Totales','Porcentaje Caida'];
+
+        const filas = logEntradas.map(e => {
+            // Separar fecha y hora del timestamp "DD/MM/YYYY HH:MM:SS"
+            const [fecha, hora] = e.ts.split(' ');
+
+            const zona = e.datos.zona || '';
+            const op   = e.datos.op   || '';
+            const estatus = ESTATUS[e.tipo] || e.tipo;
+
+            let caidos      = '';
+            let caidosAntes = '';
+            let totales     = '';
+            let porcCaida   = '';
+
+            if (e.tipo === 'inicial' || e.tipo === 'nueva_alarma') {
+                caidos    = e.datos.off   ?? '';
+                totales   = e.datos.total ?? '';
+                porcCaida = e.datos.pDown ?? '';
+            } else if (e.tipo === 'empeora') {
+                caidos      = e.datos.off      ?? '';
+                caidosAntes = e.datos.offAntes  ?? '';
+                totales     = e.datos.total     ?? '';
+                porcCaida   = e.datos.pDown     ?? '';
+            } else if (e.tipo === 'recuperado') {
+                caidos    = e.datos.off   ?? '';
+                porcCaida = e.datos.pDown ?? '';
+            }
+
+            // Escapar campos que puedan contener comas
+            const esc = v => `"${String(v).replace(/"/g, '""')}"`;
+
+            return [
+                esc(fecha), esc(hora), esc(oltActual), esc(e.nodo),
+                esc(zona), esc(op), esc(estatus),
+                esc(caidos), esc(caidosAntes), esc(totales), esc(porcCaida)
+            ].join(',');
+        });
+
+        const csv = [encabezado.join(','), ...filas].join('\n');
+        // BOM UTF-8 para que Excel lo abra correctamente con tildes
+        const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = `log_${oltActual}_${new Date().toISOString().slice(0,10)}.csv`;
         a.click();
     }
 
@@ -267,7 +324,10 @@
 
                 <!-- VISTA LOG -->
                 <div id="vista-log" style="display:none;">
-                    <button id="btn-exportar-log" style="width:100%;background:#333;border:1px solid #555;color:#aaa;font-size:10px;font-weight:bold;padding:5px 0;border-radius:4px;cursor:pointer;margin-bottom:8px;">⬇ Exportar Log (.txt)</button>
+                    <div style="display:flex;gap:4px;margin-bottom:8px;">
+                        <button id="btn-exportar-log" style="flex:1;background:#333;border:1px solid #555;color:#aaa;font-size:10px;font-weight:bold;padding:5px 0;border-radius:4px;cursor:pointer;">⬇ .TXT</button>
+                        <button id="btn-exportar-csv" style="flex:1;background:#1a3a4a;border:1px solid #1a7a9a;color:#5bc8e8;font-size:10px;font-weight:bold;padding:5px 0;border-radius:4px;cursor:pointer;">⬇ .CSV</button>
+                    </div>
                     <div id="log-list" style="max-height:45vh;overflow-y:auto;scrollbar-width:thin;font-family:'Consolas',monospace;"></div>
                 </div>
             </div>
@@ -428,6 +488,7 @@
 
         // --- Exportar log ---
         document.getElementById('btn-exportar-log').onclick = exportarLog;
+        document.getElementById('btn-exportar-csv').onclick = exportarCSV;
 
         // --- Tabs ---
         document.getElementById('tab-alarmas').onclick = () => {
