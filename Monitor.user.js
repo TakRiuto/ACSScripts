@@ -2,7 +2,7 @@
 // @name         OLT Monitor Maestro
 // @namespace    Violentmonkey Scripts
 // @match        *://190.153.58.82/monitoring/olt/*
-// @version      9
+// @version      9.1
 // @inject-into  content
 // @run-at       document-end
 // @author       Ing. Adrian Leon
@@ -36,10 +36,16 @@
 
     let umbralValor = parseFloat(localStorage.getItem('oltUmbralValor')) || 30;
     let umbralTipo = localStorage.getItem('oltUmbralTipo') || 'porcentaje';
+    let filtroOp = 'TODOS';
 
     const registroNodos = new Map();
     const sonidoAlerta = new Audio('http://soundbible.com/grab.php?id=2214&type=mp3');
     let silenciado = false;
+
+    // Bucle de sonido: al terminar, se relanza si no está silenciado
+    sonidoAlerta.addEventListener('ended', () => {
+        if (!silenciado) sonidoAlerta.play().catch(() => {});
+    });
 
     // --- LOG ---
     let logEntradas = [];
@@ -211,9 +217,13 @@
                             </select>
                             <input type="number" id="umbral-valor" class="control-umbral" style="width: 55px; text-align:center;" min="1" max="999">
                         </div>
+                        <span style="font-size:10px; color:#aaa; font-weight:bold;">OPERADORA:</span>
+                        <select id="filtro-op" class="control-umbral" style="width:100%;">
+                            <option value="TODOS">— Todas —</option>
+                        </select>
                         <button id="btn-marcar-todos" style="display:none; width:100%; background:#1ab394; border:none; color:white; font-size:11px; font-weight:bold; padding:5px 0; border-radius:4px; cursor:pointer;">✔ Marcar todos como vistos</button>
                     </div>
-                    <div id="alert-list" style="max-height:410px; overflow-y:auto; scrollbar-width: thin; font-family: 'Consolas', monospace;"></div>
+                    <div id="alert-list" style="max-height:380px; overflow-y:auto; scrollbar-width: thin; font-family: 'Consolas', monospace;"></div>
                 </div>
 
                 <!-- VISTA LOG -->
@@ -247,6 +257,10 @@
 
         inputValor.addEventListener('change', actualizarConfiguracion);
         selectTipo.addEventListener('change', actualizarConfiguracion);
+
+        document.getElementById('filtro-op').addEventListener('change', function() {
+            filtroOp = this.value;
+        });
 
         document.getElementById('btn-marcar-todos').onclick = () => {
             for (let data of registroNodos.values()) data.reconocido = true;
@@ -410,7 +424,33 @@
 
         modoCargaInicial = false;
 
-        // Actualizar badge
+        // Poblar selector de operadoras con las disponibles en criticosActuales
+        const selectOp = document.getElementById('filtro-op');
+        if (selectOp) {
+            const opsEnOlt = [...new Set(criticosActuales.map(c => c.op).filter(Boolean))].sort();
+            const opcionesActuales = [...selectOp.options].slice(1).map(o => o.value);
+            const cambiaOps = JSON.stringify(opsEnOlt) !== JSON.stringify(opcionesActuales);
+            if (cambiaOps) {
+                // Conservar selección actual si sigue disponible
+                const selAnterior = selectOp.value;
+                while (selectOp.options.length > 1) selectOp.remove(1);
+                opsEnOlt.forEach(op => {
+                    const opt = document.createElement('option');
+                    opt.value = op;
+                    opt.textContent = op;
+                    selectOp.appendChild(opt);
+                });
+                selectOp.value = opsEnOlt.includes(selAnterior) ? selAnterior : 'TODOS';
+                filtroOp = selectOp.value;
+            }
+        }
+
+        // Aplicar filtro de operadora
+        const criticosFiltrados = filtroOp === 'TODOS'
+            ? criticosActuales
+            : criticosActuales.filter(c => c.op === filtroOp);
+
+        // Actualizar badge — siempre refleja el total real, no el filtrado
         const badgeContador = document.getElementById('alert-count');
         const btnMarcar = document.getElementById('btn-marcar-todos');
         const hayAlgoSinLeer = criticosActuales.some(c => c.esNuevoParaPanel);
@@ -418,11 +458,11 @@
         hayAlgoSinLeer ? badgeContador.classList.add('header-blink') : badgeContador.classList.remove('header-blink');
         btnMarcar.style.display = hayAlgoSinLeer ? 'inline-block' : 'none';
 
-        // Actualizar lista solo si el contenido cambió
+        // Actualizar lista con los nodos filtrados
         const listContainer = document.getElementById('alert-list');
         if (listContainer) {
-            const nuevoHTML = criticosActuales.length > 0
-                ? criticosActuales.map(c => `
+            const nuevoHTML = criticosFiltrados.length > 0
+                ? criticosFiltrados.map(c => `
                     <div class="${c.esNuevoParaPanel ? 'tarjeta-panel-blink' : ''}" style="margin-bottom:12px; padding:10px; border-left:5px solid #ed5565; background:rgba(237,85,101,0.1); border-radius:0 5px 5px 0;">
                         <div style="display:flex; align-items:center; justify-content:space-between;">
                             <span style="color:#1ab394; font-weight:900; font-size:15px; letter-spacing:0.5px;">${c.id}</span>
@@ -433,7 +473,9 @@
                             ⚠️ CAÍDA: ${c.down}% | 🔴 OFF: ${c.off}
                         </div>
                     </div>`).join('')
-                : '<div style="color:#1ab394; text-align:center; padding:20px; font-weight:bold;">SISTEMA OK ✅</div>';
+                : criticosActuales.length > 0
+                    ? `<div style="color:#aaa; text-align:center; padding:20px; font-size:11px;">Sin alarmas para <b>${filtroOp}</b></div>`
+                    : '<div style="color:#1ab394; text-align:center; padding:20px; font-weight:bold;">SISTEMA OK ✅</div>';
 
             if (listContainer.innerHTML !== nuevoHTML) listContainer.innerHTML = nuevoHTML;
         }
