@@ -2,7 +2,7 @@
 // @name         OLT Monitor Maestro
 // @namespace    Violentmonkey Scripts
 // @match        *://190.153.58.82/monitoring/olt/*
-// @version      8.6
+// @version      8.7
 // @inject-into  content
 // @run-at       document-end
 // @author       Ing. Adrian Leon
@@ -33,7 +33,6 @@
     let oltActual = "";
     let modoCargaInicial = true;
     let panelAbiertoAt = 0; // Conservado para posible uso futuro
-    let filasCache = null; // Cache de filas DOM
 
     let umbralValor = parseFloat(localStorage.getItem('oltUmbralValor')) || 30;
     let umbralTipo = localStorage.getItem('oltUmbralTipo') || 'porcentaje';
@@ -160,7 +159,6 @@
             localStorage.setItem('oltUmbralValor', umbralValor);
             localStorage.setItem('oltUmbralTipo', umbralTipo);
             modoCargaInicial = true;
-            filasCache = null; // Invalida cache al cambiar configuración
             registroNodos.clear();
         };
 
@@ -195,13 +193,11 @@
         if (oltName !== oltActual) {
             oltActual = oltName;
             modoCargaInicial = true;
-            filasCache = null;
             registroNodos.clear();
         }
 
-        // Usar cache de filas si existe, si no, escanear y cachear
-        const filas = filasCache || document.querySelectorAll('tr');
-        if (!filasCache) filasCache = filas;
+        // Escanear filas directamente — tabla máx 15x16, costo negligible
+        const filas = document.querySelectorAll('tr');
 
         const criticosActuales = [];
         const ahora = Date.now();
