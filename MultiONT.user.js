@@ -7,6 +7,7 @@
 // @author      Ing. Adrian Leon
 // @updateURL    https://raw.githubusercontent.com/TakRiuto/ACSScripts/main/MultiONT.user.js
 // @downloadURL  https://raw.githubusercontent.com/TakRiuto/ACSScripts/main/MultiONT.user.js
+// @icon         https://avatars.githubusercontent.com/u/20828447?v=4
 // ==/UserScript==
 
 (function() {
