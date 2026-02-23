@@ -2,7 +2,7 @@
 // @name         OLT Monitor Maestro
 // @namespace    Violentmonkey Scripts
 // @match        *://190.153.58.82/monitoring/olt/*
-// @version      11.6
+// @version      11.8
 // @inject-into  content
 // @run-at       document-end
 // @author       Ing. Adrian Leon
@@ -124,20 +124,20 @@
             let caidos      = '';
             let caidosAntes = '';
             let totales     = '';
-            let porcCaida   = ''%;
+            let porcCaida   = '';
 
             if (e.tipo === 'inicial' || e.tipo === 'nueva_alarma') {
                 caidos    = e.datos.off   ?? '';
                 totales   = e.datos.total ?? '';
-                porcCaida = e.datos.pDown ?? '';
+                porcCaida = e.datos.pDown != null ? `${e.datos.pDown}%` : '';
             } else if (e.tipo === 'empeora') {
                 caidos      = e.datos.off      ?? '';
                 caidosAntes = e.datos.offAntes  ?? '';
                 totales     = e.datos.total     ?? '';
-                porcCaida   = e.datos.pDown     ?? '';
+                porcCaida   = e.datos.pDown != null ? `${e.datos.pDown}%` : '';
             } else if (e.tipo === 'recuperado') {
                 caidos    = e.datos.off   ?? '';
-                porcCaida = e.datos.pDown ?? '';
+                porcCaida = e.datos.pDown != null ? `${e.datos.pDown}%` : '';
             }
 
             // Escapar campos que puedan contener comas
