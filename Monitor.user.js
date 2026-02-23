@@ -297,7 +297,7 @@
                         <span style="font-size:10px;color:#aaa;font-weight:bold;">TIPO DE ALARMA:</span>
                         <select id="selector-alarma" class="ctrl" style="width:100%;">
                             <option value="placeholder1">🔔 Modo A</option>
-                            <option value="placeholder2">🐔 Intenso</option>
+                            <option value="intenso">🐔 Intenso</option>
                             <option value="chevette99" selected>⚡ Chevette 99</option>
                         </select>
 
@@ -370,7 +370,7 @@
         // --- Selector de alarma ---
         const MAPA_ALARMA = {
             placeholder1: 'modo1',
-            placeholder2: 'alarmhard',
+            intenso: 'alarmhard',
             chevette99:   'chevette99'
         };
         document.getElementById('selector-alarma').addEventListener('change', function() {
