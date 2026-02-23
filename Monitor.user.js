@@ -2,7 +2,7 @@
 // @name         OLT Monitor Maestro
 // @namespace    Violentmonkey Scripts
 // @match        *://190.153.58.82/monitoring/olt/*
-// @version      10.3
+// @version      10.4
 // @inject-into  content
 // @run-at       document-end
 // @author       Ing. Adrian Leon
@@ -496,7 +496,7 @@
         if (listContainer) {
             const nuevoHTML = criticosFiltrados.length > 0
                 ? criticosFiltrados.map(c => `
-                    <div class="${c.esNuevoParaPanel ? 'tarjeta-panel-blink' : ''}" style="margin-bottom:12px; padding:10px; border-left:5px solid #ed5565; background:rgba(0, 0, 0, 0.9); border-radius:0 5px 5px 0;">
+                    <div class="${c.esNuevoParaPanel ? 'tarjeta-panel-blink' : ''}" style="margin-bottom:12px; padding:10px; border-left:5px solid #ed5565; background:rgba(255,255,255,0.03); border-radius:0 5px 5px 0;">
                         <div style="display:flex; align-items:center; justify-content:space-between;">
                             <span style="color:#1ab394; font-weight:900; font-size: clamp(13px, 1.2vw, 18px); letter-spacing:0.5px;">${c.id}</span>
                             ${c.esNuevoParaPanel ? '<span class="badge-nuevo">NUEVO</span>' : ''}
