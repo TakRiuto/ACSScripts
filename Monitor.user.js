@@ -2,7 +2,7 @@
 // @name         OLT Monitor Maestro
 // @namespace    Violentmonkey Scripts
 // @match        *://190.153.58.82/monitoring/olt/*
-// @version      9.3
+// @version      9.4
 // @inject-into  content
 // @run-at       document-end
 // @author       Ing. Adrian Leon
@@ -292,7 +292,7 @@
             const content = document.getElementById('alert-content');
             const abriendo = content.style.display === 'none';
             content.style.display = abriendo ? 'block' : 'none';
-            document.getElementById('olt-alert-panel').style.width = abriendo ? '260px' : '100px';
+            document.getElementById('olt-alert-panel').style.width = abriendo ? '350px' : '150px';
             document.getElementById('toggle-btn').innerText = abriendo ? '−' : '+';
             panelAbiertoAt = abriendo ? Date.now() : 0;
         };
