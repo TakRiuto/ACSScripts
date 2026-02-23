@@ -223,13 +223,13 @@
                         </select>
                         <button id="btn-marcar-todos" style="display:none; width:100%; background:#1ab394; border:none; color:white; font-size:11px; font-weight:bold; padding:5px 0; border-radius:4px; cursor:pointer;">✔ Marcar todos como vistos</button>
                     </div>
-                    <div id="alert-list" style="max-height:380px; overflow-y:auto; scrollbar-width: thin; font-family: 'Consolas', monospace;"></div>
+                    <div id="alert-list" style="max-height: calc(100vh - 220px); overflow-y:auto; scrollbar-width: thin; font-family: 'Consolas', monospace;"></div>
                 </div>
 
                 <!-- VISTA LOG -->
                 <div id="vista-log" style="display:none;">
                     <button id="btn-exportar-log" style="width:100%; background:#333; border:1px solid #555; color:#aaa; font-size:10px; font-weight:bold; padding:5px 0; border-radius:4px; cursor:pointer; margin-bottom:8px;">⬇ Exportar Log (.txt)</button>
-                    <div id="log-list" style="max-height:450px; overflow-y:auto; scrollbar-width: thin; font-family: 'Consolas', monospace;"></div>
+                    <div id="log-list" style="max-height: calc(100vh - 160px); overflow-y:auto; scrollbar-width: thin; font-family: 'Consolas', monospace;"></div>
                 </div>
             </div>
         `;
