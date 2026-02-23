@@ -14,7 +14,10 @@ Multiple tools for monitoring under InCa
 | **Multi ONT** | [![Install](https://img.shields.io/badge/Install-MultiONT-green?style=flat-square&logo=tampermonkey)](https://raw.githubusercontent.com/TakRiuto/ACSScripts/main/MultiONT.user.js) |
 | **Multi TODO** | [![Install](https://img.shields.io/badge/Install-MultiTODO-green?style=flat-square&logo=tampermonkey)](https://raw.githubusercontent.com/TakRiuto/ACSScripts/main/MultiTODO.user.js) |
 
-3. Open InCa and test.
+3. Enable userscripts (Only if can't enable dev mode):
+   - https://www.tampermonkey.net/faq.php?locale=en#Q209
+
+4. Open InCa and test.
 
 ## Updating
 
