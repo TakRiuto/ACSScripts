@@ -10,6 +10,7 @@
 // @downloadURL  https://raw.githubusercontent.com/TakRiuto/ACSScripts/main/Monitor.user.js
 // @grant        GM_fetch
 // @connect      raw.githubusercontent.com
+// @icon         https://avatars.githubusercontent.com/u/20828447?v=4
 // ==/UserScript==
 
 (async function() {
