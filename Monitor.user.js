@@ -2,7 +2,7 @@
 // @name         OLT Monitor Maestro
 // @namespace    Violentmonkey Scripts
 // @match        *://190.153.58.82/monitoring/olt/*
-// @version      9.1
+// @version      9.2
 // @inject-into  content
 // @run-at       document-end
 // @author       Ing. Adrian Leon
@@ -470,7 +470,7 @@
                         </div>
                         <div style="font-size:11px; color:#ddd; margin: 3px 0;">📍 ${c.zona} | 🏢 ${c.op}</div>
                         <div style="margin-top:6px; color:#ed5565; font-size:12px; font-weight:bold;">
-                            ⚠️ CAÍDA: ${c.down}% | 🔴 OFF: ${c.off}
+                            ⚠️ CAÍDA: ${c.down}% | 🔴 OFF: ${c.off} de ${c.total}
                         </div>
                     </div>`).join('')
                 : criticosActuales.length > 0
