@@ -2,7 +2,7 @@
 // @name         OLT Monitor Maestro
 // @namespace    Violentmonkey Scripts
 // @match        *://190.153.58.82/monitoring/olt/*
-// @version      9.7
+// @version      10.2
 // @inject-into  content
 // @run-at       document-end
 // @author       Ing. Adrian Leon
@@ -33,7 +33,6 @@
     let oltActual = "";
     let modoCargaInicial = true;
     let panelAbiertoAt = 0; // Conservado para posible uso futuro
-
     let umbralValor = parseFloat(localStorage.getItem('oltUmbralValor')) || 30;
     let umbralTipo = localStorage.getItem('oltUmbralTipo') || 'porcentaje';
     let filtroOp = 'TODOS';
@@ -41,12 +40,14 @@
     const registroNodos = new Map();
     const sonidoAlerta = new Audio('http://soundbible.com/grab.php?id=2214&type=mp3');
     let silenciado = false;
+    let muteGlobal = localStorage.getItem('oltMuteGlobal') === 'true';
+
     // Forzar autorización de audio por parte del navegador
     let audioAutorizado = false;
     document.addEventListener('click', () => {
         if (!audioAutorizado) {
             audioAutorizado = true;
-            
+
             // Solo hacemos el ciclo rápido de play/pause si la alarma NO está sonando
             if (sonidoAlerta.paused) {
                 sonidoAlerta.play().then(() => {
@@ -62,7 +63,7 @@
 
     // Bucle de sonido: al terminar, se relanza si no está silenciado
     sonidoAlerta.addEventListener('ended', () => {
-        if (!silenciado) sonidoAlerta.play().catch(() => {});
+        if (!silenciado && !muteGlobal) sonidoAlerta.play().catch(() => {});
     });
 
     // --- LOG ---
@@ -104,7 +105,7 @@
         if (!contenedor) return;
 
         if (logEntradas.length === 0) {
-            contenedor.innerHTML = '<div style="color:#aaa; text-align:center; padding:20px; font-size:11px;">Sin eventos registrados.</div>';
+            contenedor.innerHTML = '<div style="color:#aaa; text-align:center; padding:20px; font-size: clamp(11px, 0.9vw, 14px);">Sin eventos registrados.</div>';
             return;
         }
 
@@ -124,11 +125,11 @@
             return `
                 <div style="margin-bottom:8px; padding:8px; border-left:4px solid ${colores[e.tipo]}; background:rgba(255,255,255,0.03); border-radius:0 4px 4px 0;">
                     <div style="display:flex; justify-content:space-between; align-items:center;">
-                        <span style="color:${colores[e.tipo]}; font-size:10px; font-weight:bold;">${iconos[e.tipo]} ${labels[e.tipo]}</span>
-                        <span style="color:#666; font-size:9px;">${e.ts}</span>
+                        <span style="color:${colores[e.tipo]}; font-size: clamp(10px, 0.8vw, 12px); font-weight:bold;">${iconos[e.tipo]} ${labels[e.tipo]}</span>
+                        <span style="color:#666; font-size: clamp(8px, 0.7vw, 10px);">${e.ts}</span>
                     </div>
-                    <div style="color:#ccc; font-size:11px; font-weight:bold; margin:2px 0;">${e.nodo}</div>
-                    <div style="color:#aaa; font-size:10px;">${detalle}</div>
+                    <div style="color:#ccc; font-size: clamp(11px, 0.9vw, 14px); font-weight:bold; margin:2px 0;">${e.nodo}</div>
+                    <div style="color:#aaa; font-size: clamp(9px, 0.75vw, 11px);">${detalle}</div>
                 </div>`;
         }).join('');
     }
@@ -190,14 +191,14 @@
         .tarjeta-panel-blink { animation: pulsePanel 1s infinite ease-in-out !important; }
         .badge-nuevo {
             background-color: #fff !important; color: #ed5565 !important;
-            font-size: 10px !important; font-weight: 900 !important;
+            font-size: clamp(9px, 0.75vw, 11px) !important; font-weight: 900 !important;
             padding: 2px 6px !important; border-radius: 4px !important;
             margin-left: 8px !important; box-shadow: 0 0 8px #fff;
         }
         .header-blink { animation: pulsePanel 0.4s infinite alternate !important; box-shadow: 0 0 15px #ed5565 !important; }
         .control-umbral {
             background: #222; color: #ed5565; border: 1px solid #555;
-            border-radius: 3px; padding: 3px 5px; font-size: 11px;
+            border-radius: 3px; padding: 3px 5px; font-size: clamp(10px, 0.8vw, 12px);
             font-weight: bold; cursor: pointer; outline: none; box-sizing: border-box;
         }
         .control-umbral:hover, .control-umbral:focus { border-color: #ed5565; }
@@ -211,23 +212,26 @@
         const panel = document.createElement('div');
         panel.id = 'olt-alert-panel';
         panel.innerHTML = `
-            <div id="panel-header" style="cursor:pointer; font-weight:bold; border-bottom:1px solid #ed5565; margin-bottom:10px; padding-bottom:5px; font-size:13px; color:#ed5565; display:flex; justify-content:space-between; align-items:center;">
-                <span id="header-text">🚨 <span id="alert-count" style="background:#ed5565; color:white; border-radius:10px; padding:0 8px; font-size:11px;">0</span></span>
+            <div id="panel-header" style="cursor:pointer; font-weight:bold; border-bottom:1px solid #ed5565; margin-bottom:10px; padding-bottom:5px; font-size: clamp(13px, 1.1vw, 16px); color:#ed5565; display:flex; justify-content:space-between; align-items:center;">
+                <span id="header-text">🚨 <span id="alert-count" style="background:#ed5565; color:white; border-radius:10px; padding:0 8px; font-size: clamp(11px, 0.9vw, 14px);">0</span></span>
                 <div style="display:flex; align-items:center; gap:6px;">
-                    <span id="toggle-btn" style="font-size:16px;">+</span>
+                    <span id="toggle-btn" style="font-size: clamp(14px, 1.2vw, 18px);">+</span>
                 </div>
             </div>
             <div id="alert-content" style="display: none;">
-                <!-- TABS -->
                 <div style="display:flex; gap:4px; margin-bottom:10px;">
-                    <button id="tab-alarmas" style="flex:1; padding:4px 0; font-size:10px; font-weight:bold; border:none; border-radius:3px; cursor:pointer; background:#ed5565; color:white;">🚨 Alarmas</button>
-                    <button id="tab-log"     style="flex:1; padding:4px 0; font-size:10px; font-weight:bold; border:none; border-radius:3px; cursor:pointer; background:#333; color:#aaa;">📋 Log</button>
+                    <button id="tab-alarmas" style="flex:1; padding:4px 0; font-size: clamp(9px, 0.75vw, 12px); font-weight:bold; border:none; border-radius:3px; cursor:pointer; background:#ed5565; color:white;">🚨 Alarmas</button>
+                    <button id="tab-log"     style="flex:1; padding:4px 0; font-size: clamp(9px, 0.75vw, 12px); font-weight:bold; border:none; border-radius:3px; cursor:pointer; background:#333; color:#aaa;">📋 Log</button>
                 </div>
 
-                <!-- VISTA ALARMAS -->
                 <div id="vista-alarmas">
                     <div style="background: rgba(255,255,255,0.05); padding: 8px; margin-bottom: 10px; border-radius: 4px; display:flex; flex-direction:column; gap:6px;">
-                        <span style="font-size:10px; color:#aaa; font-weight:bold;">TIPO DE ALARMA:</span>
+                        <div style="display:flex; justify-content:space-between; align-items:center;">
+                            <span style="font-size: clamp(9px, 0.75vw, 12px); color:#aaa; font-weight:bold;">TIPO DE ALARMA:</span>
+                            <label style="font-size: clamp(9px, 0.75vw, 12px); color:#ccc; font-weight:bold; cursor:pointer; display:flex; align-items:center; gap:4px;" title="Silenciar alertas globalmente">
+                                <input type="checkbox" id="toggle-mute-global" style="margin:0; cursor:pointer;"> 🔇 Silenciar
+                            </label>
+                        </div>
                         <div style="display:flex; justify-content:space-between; gap: 5px;">
                             <select id="umbral-tipo" class="control-umbral" style="flex: 1;">
                                 <option value="porcentaje">Porcentaje (%)</option>
@@ -235,24 +239,23 @@
                             </select>
                             <input type="number" id="umbral-valor" class="control-umbral" style="width: 55px; text-align:center;" min="1" max="999">
                         </div>
-                        <span style="font-size:10px; color:#aaa; font-weight:bold;">OPERADORA:</span>
+                        <span style="font-size: clamp(9px, 0.75vw, 12px); color:#aaa; font-weight:bold;">OPERADORA:</span>
                         <select id="filtro-op" class="control-umbral" style="width:100%;">
                             <option value="TODOS">— Todas —</option>
                         </select>
-                        <button id="btn-marcar-todos" style="display:none; width:100%; background:#1ab394; border:none; color:white; font-size:11px; font-weight:bold; padding:5px 0; border-radius:4px; cursor:pointer;">✔ Marcar todos como vistos</button>
+                        <button id="btn-marcar-todos" style="display:none; width:100%; background:#1ab394; border:none; color:white; font-size: clamp(11px, 0.9vw, 14px); font-weight:bold; padding:5px 0; border-radius:4px; cursor:pointer;">✔ Marcar todos como vistos</button>
                     </div>
                     <div id="alert-list" style="max-height: 40vh; overflow-y:auto; scrollbar-width: thin; font-family: 'Consolas', monospace;"></div>
                 </div>
 
-                <!-- VISTA LOG -->
                 <div id="vista-log" style="display:none;">
-                    <button id="btn-exportar-log" style="width:100%; background:#333; border:1px solid #555; color:#aaa; font-size:10px; font-weight:bold; padding:5px 0; border-radius:4px; cursor:pointer; margin-bottom:8px;">⬇ Exportar Log (.txt)</button>
+                    <button id="btn-exportar-log" style="width:100%; background:#333; border:1px solid #555; color:#aaa; font-size: clamp(9px, 0.75vw, 12px); font-weight:bold; padding:5px 0; border-radius:4px; cursor:pointer; margin-bottom:8px;">⬇ Exportar Log (.txt)</button>
                     <div id="log-list" style="max-height: 45vh; overflow-y:auto; scrollbar-width: thin; font-family: 'Consolas', monospace;"></div>
                 </div>
             </div>
         `;
         Object.assign(panel.style, {
-            position: 'fixed', bottom: '20px', left: '0px', width: '90px',
+            position: 'fixed', bottom: '20px', left: '0px', width: '120px',
             backgroundColor: 'rgba(5, 5, 5, 0.98)', color: 'white', padding: '12px',
             borderRadius: '0 8px 8px 0', boxShadow: '5px 0 20px rgba(0,0,0,1)', zIndex: '10000',
             border: '1px solid #444', borderLeft: 'none', transition: 'width 0.2s ease'
@@ -263,7 +266,18 @@
         const selectTipo = document.getElementById('umbral-tipo');
         inputValor.value = umbralValor;
         selectTipo.value = umbralTipo;
-
+        const checkMuteGlobal = document.getElementById('toggle-mute-global');
+        if (checkMuteGlobal) {
+            checkMuteGlobal.checked = muteGlobal;
+            checkMuteGlobal.addEventListener('change', (e) => {
+                muteGlobal = e.target.checked;
+                localStorage.setItem('oltMuteGlobal', muteGlobal);
+                if (muteGlobal) {
+                    sonidoAlerta.pause();
+                    sonidoAlerta.currentTime = 0;
+                }
+            });
+        }
         const actualizarConfiguracion = () => {
             umbralValor = parseFloat(inputValor.value) || 0;
             umbralTipo = selectTipo.value;
@@ -293,16 +307,16 @@
             vistaActual = 'alarmas';
             document.getElementById('vista-alarmas').style.display = 'block';
             document.getElementById('vista-log').style.display = 'none';
-            document.getElementById('tab-alarmas').style.cssText = 'flex:1; padding:4px 0; font-size:10px; font-weight:bold; border:none; border-radius:3px; cursor:pointer; background:#ed5565; color:white;';
-            document.getElementById('tab-log').style.cssText     = 'flex:1; padding:4px 0; font-size:10px; font-weight:bold; border:none; border-radius:3px; cursor:pointer; background:#333; color:#aaa;';
+            document.getElementById('tab-alarmas').style.cssText = 'flex:1; padding:4px 0; font-size: clamp(9px, 0.75vw, 12px); font-weight:bold; border:none; border-radius:3px; cursor:pointer; background:#ed5565; color:white;';
+            document.getElementById('tab-log').style.cssText     = 'flex:1; padding:4px 0; font-size: clamp(9px, 0.75vw, 12px); font-weight:bold; border:none; border-radius:3px; cursor:pointer; background:#333; color:#aaa;';
         };
 
         document.getElementById('tab-log').onclick = () => {
             vistaActual = 'log';
             document.getElementById('vista-alarmas').style.display = 'none';
             document.getElementById('vista-log').style.display = 'block';
-            document.getElementById('tab-alarmas').style.cssText = 'flex:1; padding:4px 0; font-size:10px; font-weight:bold; border:none; border-radius:3px; cursor:pointer; background:#333; color:#aaa;';
-            document.getElementById('tab-log').style.cssText     = 'flex:1; padding:4px 0; font-size:10px; font-weight:bold; border:none; border-radius:3px; cursor:pointer; background:#1ab394; color:white;';
+            document.getElementById('tab-alarmas').style.cssText = 'flex:1; padding:4px 0; font-size: clamp(9px, 0.75vw, 12px); font-weight:bold; border:none; border-radius:3px; cursor:pointer; background:#333; color:#aaa;';
+            document.getElementById('tab-log').style.cssText     = 'flex:1; padding:4px 0; font-size: clamp(9px, 0.75vw, 12px); font-weight:bold; border:none; border-radius:3px; cursor:pointer; background:#1ab394; color:white;';
             renderizarLog();
         };
 
@@ -310,7 +324,7 @@
             const content = document.getElementById('alert-content');
             const abriendo = content.style.display === 'none';
             content.style.display = abriendo ? 'block' : 'none';
-            document.getElementById('olt-alert-panel').style.width = abriendo ? '350px' : '90px';
+            document.getElementById('olt-alert-panel').style.width = abriendo ? '450px' : '120px';
             document.getElementById('toggle-btn').innerText = abriendo ? '−' : '+';
             panelAbiertoAt = abriendo ? Date.now() : 0;
         };
@@ -364,7 +378,8 @@
 
                 if (etiquetas.length > 0) {
                     labelPrincipal = etiquetas[0];
-                    labelPrincipal.innerHTML = `<div style="line-height:1.1;"><b style="font-size:11px;">${pDown}% DN</b><br><span style="font-size:9px;">${pUp}% UP</span></div>`;
+                    // También ajustamos los textos inyectados en la tabla principal para que escalen sutilmente
+                    labelPrincipal.innerHTML = `<div style="line-height:1.1;"><b style="font-size: 11px;">${pDown}% DN</b><br><span style="font-size: 9px;">${pUp}% UP</span></div>`;
                     for (let i = 1; i < etiquetas.length; i++) etiquetas[i].style.display = 'none';
                 }
 
@@ -424,7 +439,7 @@
             }
         });
 
-        if (hayNovedadesParaAlarma && !silenciado) sonidoAlerta.play().catch(() => {});
+        if (hayNovedadesParaAlarma && !silenciado && !muteGlobal) sonidoAlerta.play().catch(() => {});
 
         // Limpiar nodos que ya no están activos y registrar recuperación
         const idsActivos = new Set(criticosActuales.map(c => c.id));
@@ -481,19 +496,19 @@
         if (listContainer) {
             const nuevoHTML = criticosFiltrados.length > 0
                 ? criticosFiltrados.map(c => `
-                    <div class="${c.esNuevoParaPanel ? 'tarjeta-panel-blink' : ''}" style="margin-bottom:12px; padding:10px; border-left:5px solid #ed5565; background:rgba(237,85,101,0.1); border-radius:0 5px 5px 0;">
+                    <div class="${c.esNuevoParaPanel ? 'tarjeta-panel-blink' : ''}" style="margin-bottom:12px; padding:10px; border-left:5px solid #ed5565; background:rgba(36, 31, 32, 0.71); border-radius:0 5px 5px 0;">
                         <div style="display:flex; align-items:center; justify-content:space-between;">
-                            <span style="color:#1ab394; font-weight:900; font-size:15px; letter-spacing:0.5px;">${c.id}</span>
+                            <span style="color:#1ab394; font-weight:900; font-size: clamp(13px, 1.2vw, 18px); letter-spacing:0.5px;">${c.id}</span>
                             ${c.esNuevoParaPanel ? '<span class="badge-nuevo">NUEVO</span>' : ''}
                         </div>
-                        <div style="font-size:11px; color:#ddd; margin: 3px 0;">📍 ${c.zona} | 🏢 ${c.op}</div>
-                        <div style="margin-top:6px; color:#ed5565; font-size:12px; font-weight:bold;">
+                        <div style="font-size: clamp(9px, 0.75vw, 12px); color:#ddd; margin: 3px 0;">📍 ${c.zona} | 🏢 ${c.op}</div>
+                        <div style="margin-top:6px; color:#ed5565; font-size: clamp(10px, 0.8vw, 12px); font-weight:bold;">
                             ⚠️ CAÍDA: ${c.down}% | 🔴 OFF: ${c.off} | 👥 TOTAL: ${c.total}
                         </div>
                     </div>`).join('')
                 : criticosActuales.length > 0
-                    ? `<div style="color:#aaa; text-align:center; padding:20px; font-size:11px;">Sin alarmas para <b>${filtroOp}</b></div>`
-                    : '<div style="color:#1ab394; text-align:center; padding:20px; font-weight:bold;">SISTEMA OK ✅</div>';
+                    ? `<div style="color:#aaa; text-align:center; padding:20px; font-size: clamp(11px, 0.9vw, 14px);">Sin alarmas para <b>${filtroOp}</b></div>`
+                    : '<div style="color:#1ab394; text-align:center; padding:20px; font-weight:bold; font-size: clamp(12px, 1vw, 15px);">SISTEMA OK ✅</div>';
 
             if (listContainer.innerHTML !== nuevoHTML) listContainer.innerHTML = nuevoHTML;
         }
