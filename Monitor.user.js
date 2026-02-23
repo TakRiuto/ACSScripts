@@ -124,7 +124,7 @@
             let caidos      = '';
             let caidosAntes = '';
             let totales     = '';
-            let porcCaida   = '';
+            let porcCaida   = ''%;
 
             if (e.tipo === 'inicial' || e.tipo === 'nueva_alarma') {
                 caidos    = e.datos.off   ?? '';
