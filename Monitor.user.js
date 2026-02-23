@@ -2,7 +2,7 @@
 // @name         OLT Monitor Maestro
 // @namespace    Violentmonkey Scripts
 // @match        *://190.153.58.82/monitoring/olt/*
-// @version      12
+// @version      12.1
 // @inject-into  content
 // @run-at       document-end
 // @author       Ing. Adrian Leon
@@ -44,7 +44,7 @@
     // Para cambiar un sonido, reemplaza la URL correspondiente
     const AUDIOS = {
         modo1:     new Audio('https://PLACEHOLDER-AUDIO-MODO-1.mp3'),   // ⚙ Modo A
-        modo2:     new Audio('https://PLACEHOLDER-AUDIO-MODO-2.mp3'),   // ⚙ Modo B
+        alarmhard:     new Audio('https://www.myinstants.com/media/sounds/chicken-on-tree-screaming.mp3'),   // 🐔 Intenso
         chevette99: new Audio('http://soundbible.com/grab.php?id=2214&type=mp3') // ⚡ Chevette 99
     };
     // Precargar todos para evitar latencia en el primer play
@@ -297,7 +297,7 @@
                         <span style="font-size:10px;color:#aaa;font-weight:bold;">TIPO DE ALARMA:</span>
                         <select id="selector-alarma" class="ctrl" style="width:100%;">
                             <option value="placeholder1">🔔 Modo A</option>
-                            <option value="placeholder2">🔔 Modo B</option>
+                            <option value="placeholder2">🐔 Intenso</option>
                             <option value="chevette99" selected>⚡ Chevette 99</option>
                         </select>
 
@@ -370,7 +370,7 @@
         // --- Selector de alarma ---
         const MAPA_ALARMA = {
             placeholder1: 'modo1',
-            placeholder2: 'modo2',
+            placeholder2: 'alarmhard',
             chevette99:   'chevette99'
         };
         document.getElementById('selector-alarma').addEventListener('change', function() {
