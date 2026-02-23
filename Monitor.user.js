@@ -2,7 +2,7 @@
 // @name         OLT Monitor Maestro
 // @namespace    Violentmonkey Scripts
 // @match        *://190.153.58.82/monitoring/olt/*
-// @version      8.7
+// @version      8.8
 // @inject-into  content
 // @run-at       document-end
 // @author       Ing. Adrian Leon
@@ -40,6 +40,74 @@
     const registroNodos = new Map();
     const sonidoAlerta = new Audio('http://soundbible.com/grab.php?id=2214&type=mp3');
     let silenciado = false;
+
+    // --- LOG ---
+    let logEntradas = [];
+    let vistaActual = 'alarmas'; // 'alarmas' | 'log'
+
+    function timestamp() {
+        const now = new Date();
+        const fecha = now.toLocaleDateString('es-VE', { day:'2-digit', month:'2-digit', year:'numeric' });
+        const hora  = now.toLocaleTimeString('es-VE', { hour:'2-digit', minute:'2-digit', second:'2-digit' });
+        return `${fecha} ${hora}`;
+    }
+
+    function registrarLog(tipo, nodo, datos) {
+        // tipo: 'inicial' | 'nueva_alarma' | 'empeora' | 'recuperado'
+        const entrada = { tipo, nodo, datos, ts: timestamp() };
+        logEntradas.unshift(entrada); // más reciente arriba
+        renderizarLog();
+    }
+
+    function exportarLog() {
+        const lineas = [`OLT: ${oltActual}`, `Exportado: ${timestamp()}`, '─'.repeat(60)];
+        logEntradas.forEach(e => {
+            const base = `[${e.ts}] ${e.nodo}`;
+            if (e.tipo === 'inicial')      lineas.push(`${base} | INICIO    | Total:${e.datos.total} ON:${e.datos.on} OFF:${e.datos.off} (${e.datos.pDown}% caída)`);
+            if (e.tipo === 'nueva_alarma') lineas.push(`${base} | ALARMA    | Total:${e.datos.total} ON:${e.datos.on} OFF:${e.datos.off} (${e.datos.pDown}% caída)`);
+            if (e.tipo === 'empeora')      lineas.push(`${base} | EMPEORA   | OFF:${e.datos.offAntes}→${e.datos.off} (${e.datos.pDownAntes}%→${e.datos.pDown}%)`);
+            if (e.tipo === 'recuperado')   lineas.push(`${base} | RECUPERADO| Estaba OFF:${e.datos.off} (${e.datos.pDown}%)`);
+        });
+        const blob = new Blob([lineas.join('\n')], { type: 'text/plain' });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = `log_${oltActual}_${new Date().toISOString().slice(0,10)}.txt`;
+        a.click();
+    }
+
+    function renderizarLog() {
+        const contenedor = document.getElementById('log-list');
+        if (!contenedor) return;
+
+        if (logEntradas.length === 0) {
+            contenedor.innerHTML = '<div style="color:#aaa; text-align:center; padding:20px; font-size:11px;">Sin eventos registrados.</div>';
+            return;
+        }
+
+        const colores = { inicial: '#555', nueva_alarma: '#ed5565', empeora: '#e67e22', recuperado: '#1ab394' };
+        const iconos  = { inicial: '📋', nueva_alarma: '🔴', empeora: '📉', recuperado: '✅' };
+        const labels  = { inicial: 'INICIO', nueva_alarma: 'ALARMA', empeora: 'EMPEORA', recuperado: 'RECUPERADO' };
+
+        contenedor.innerHTML = logEntradas.map(e => {
+            let detalle = '';
+            if (e.tipo === 'inicial' || e.tipo === 'nueva_alarma')
+                detalle = `Total: ${e.datos.total} &nbsp;|&nbsp; ON: ${e.datos.on} &nbsp;|&nbsp; OFF: ${e.datos.off} &nbsp;|&nbsp; <b>${e.datos.pDown}% caída</b>`;
+            if (e.tipo === 'empeora')
+                detalle = `OFF: ${e.datos.offAntes} → <b>${e.datos.off}</b> &nbsp;|&nbsp; ${e.datos.pDownAntes}% → <b>${e.datos.pDown}%</b>`;
+            if (e.tipo === 'recuperado')
+                detalle = `Estaba OFF: ${e.datos.off} (${e.datos.pDown}%)`;
+
+            return `
+                <div style="margin-bottom:8px; padding:8px; border-left:4px solid ${colores[e.tipo]}; background:rgba(255,255,255,0.03); border-radius:0 4px 4px 0;">
+                    <div style="display:flex; justify-content:space-between; align-items:center;">
+                        <span style="color:${colores[e.tipo]}; font-size:10px; font-weight:bold;">${iconos[e.tipo]} ${labels[e.tipo]}</span>
+                        <span style="color:#666; font-size:9px;">${e.ts}</span>
+                    </div>
+                    <div style="color:#ccc; font-size:11px; font-weight:bold; margin:2px 0;">${e.nodo}</div>
+                    <div style="color:#aaa; font-size:10px;">${detalle}</div>
+                </div>`;
+        }).join('');
+    }
 
     // --- FAVICON DINÁMICO ---
     let faviconEl = document.querySelector("link[rel~='icon']");
@@ -126,18 +194,33 @@
                 </div>
             </div>
             <div id="alert-content" style="display: none;">
-                <div style="background: rgba(255,255,255,0.05); padding: 8px; margin-bottom: 10px; border-radius: 4px; display:flex; flex-direction:column; gap:6px;">
-                    <span style="font-size:10px; color:#aaa; font-weight:bold;">TIPO DE ALARMA:</span>
-                    <div style="display:flex; justify-content:space-between; gap: 5px;">
-                        <select id="umbral-tipo" class="control-umbral" style="flex: 1;">
-                            <option value="porcentaje">Porcentaje (%)</option>
-                            <option value="cantidad">Cant. Caídos</option>
-                        </select>
-                        <input type="number" id="umbral-valor" class="control-umbral" style="width: 55px; text-align:center;" min="1" max="999">
-                    </div>
-                    <button id="btn-marcar-todos" style="display:none; width:100%; background:#1ab394; border:none; color:white; font-size:11px; font-weight:bold; padding:5px 0; border-radius:4px; cursor:pointer;">✔ Marcar todos como vistos</button>
+                <!-- TABS -->
+                <div style="display:flex; gap:4px; margin-bottom:10px;">
+                    <button id="tab-alarmas" style="flex:1; padding:4px 0; font-size:10px; font-weight:bold; border:none; border-radius:3px; cursor:pointer; background:#ed5565; color:white;">🚨 Alarmas</button>
+                    <button id="tab-log"     style="flex:1; padding:4px 0; font-size:10px; font-weight:bold; border:none; border-radius:3px; cursor:pointer; background:#333; color:#aaa;">📋 Log</button>
                 </div>
-                <div id="alert-list" style="max-height:410px; overflow-y:auto; scrollbar-width: thin; font-family: 'Consolas', monospace;"></div>
+
+                <!-- VISTA ALARMAS -->
+                <div id="vista-alarmas">
+                    <div style="background: rgba(255,255,255,0.05); padding: 8px; margin-bottom: 10px; border-radius: 4px; display:flex; flex-direction:column; gap:6px;">
+                        <span style="font-size:10px; color:#aaa; font-weight:bold;">TIPO DE ALARMA:</span>
+                        <div style="display:flex; justify-content:space-between; gap: 5px;">
+                            <select id="umbral-tipo" class="control-umbral" style="flex: 1;">
+                                <option value="porcentaje">Porcentaje (%)</option>
+                                <option value="cantidad">Cant. Caídos</option>
+                            </select>
+                            <input type="number" id="umbral-valor" class="control-umbral" style="width: 55px; text-align:center;" min="1" max="999">
+                        </div>
+                        <button id="btn-marcar-todos" style="display:none; width:100%; background:#1ab394; border:none; color:white; font-size:11px; font-weight:bold; padding:5px 0; border-radius:4px; cursor:pointer;">✔ Marcar todos como vistos</button>
+                    </div>
+                    <div id="alert-list" style="max-height:410px; overflow-y:auto; scrollbar-width: thin; font-family: 'Consolas', monospace;"></div>
+                </div>
+
+                <!-- VISTA LOG -->
+                <div id="vista-log" style="display:none;">
+                    <button id="btn-exportar-log" style="width:100%; background:#333; border:1px solid #555; color:#aaa; font-size:10px; font-weight:bold; padding:5px 0; border-radius:4px; cursor:pointer; margin-bottom:8px;">⬇ Exportar Log (.txt)</button>
+                    <div id="log-list" style="max-height:450px; overflow-y:auto; scrollbar-width: thin; font-family: 'Consolas', monospace;"></div>
+                </div>
             </div>
         `;
         Object.assign(panel.style, {
@@ -172,6 +255,25 @@
             sonidoAlerta.currentTime = 0;
         };
 
+        document.getElementById('btn-exportar-log').onclick = exportarLog;
+
+        document.getElementById('tab-alarmas').onclick = () => {
+            vistaActual = 'alarmas';
+            document.getElementById('vista-alarmas').style.display = 'block';
+            document.getElementById('vista-log').style.display = 'none';
+            document.getElementById('tab-alarmas').style.cssText = 'flex:1; padding:4px 0; font-size:10px; font-weight:bold; border:none; border-radius:3px; cursor:pointer; background:#ed5565; color:white;';
+            document.getElementById('tab-log').style.cssText     = 'flex:1; padding:4px 0; font-size:10px; font-weight:bold; border:none; border-radius:3px; cursor:pointer; background:#333; color:#aaa;';
+        };
+
+        document.getElementById('tab-log').onclick = () => {
+            vistaActual = 'log';
+            document.getElementById('vista-alarmas').style.display = 'none';
+            document.getElementById('vista-log').style.display = 'block';
+            document.getElementById('tab-alarmas').style.cssText = 'flex:1; padding:4px 0; font-size:10px; font-weight:bold; border:none; border-radius:3px; cursor:pointer; background:#333; color:#aaa;';
+            document.getElementById('tab-log').style.cssText     = 'flex:1; padding:4px 0; font-size:10px; font-weight:bold; border:none; border-radius:3px; cursor:pointer; background:#1ab394; color:white;';
+            renderizarLog();
+        };
+
         document.getElementById('panel-header').onclick = function() {
             const content = document.getElementById('alert-content');
             const abriendo = content.style.display === 'none';
@@ -193,6 +295,7 @@
         if (oltName !== oltActual) {
             oltActual = oltName;
             modoCargaInicial = true;
+            logEntradas = [];
             registroNodos.clear();
         }
 
@@ -234,20 +337,38 @@
                 }
 
                 if (superaUmbral) {
+                    const info = DB_NODOS[idNodo] || { op: "---", zona: "S/I" };
+                    const datosNodo = { total, on, off, pDown, pUp };
+
                     if (!registroNodos.has(idNodo)) {
                         registroNodos.set(idNodo, {
                             origen: modoCargaInicial ? 'inicial' : 'nuevo',
                             reconocido: modoCargaInicial,
-                            timestamp: ahora
+                            timestamp: ahora,
+                            offAnterior: off,
+                            pDownAnterior: pDown
                         });
-                        if (!modoCargaInicial) {
+                        if (modoCargaInicial) {
+                            registrarLog('inicial', idNodo, datosNodo);
+                        } else {
                             hayNovedadesParaAlarma = true;
-                            silenciado = false; // Nodo nuevo reactiva la alarma
+                            silenciado = false;
+                            registrarLog('nueva_alarma', idNodo, datosNodo);
+                        }
+                    } else {
+                        const data = registroNodos.get(idNodo);
+                        if (off > data.offAnterior) {
+                            registrarLog('empeora', idNodo, {
+                                ...datosNodo,
+                                offAntes: data.offAnterior,
+                                pDownAntes: data.pDownAnterior
+                            });
+                            data.offAnterior = off;
+                            data.pDownAnterior = pDown;
                         }
                     }
 
                     const data = registroNodos.get(idNodo);
-
                     const esNuevoParaPanel = (data.origen === 'nuevo' && !data.reconocido);
 
                     if (labelPrincipal) {
@@ -260,7 +381,6 @@
                         }
                     }
 
-                    const info = DB_NODOS[idNodo] || { op: "---", zona: "S/I" };
                     criticosActuales.push({ id: idNodo, down: pDown, off, ...info, esNuevoParaPanel });
 
                 } else {
@@ -274,9 +394,19 @@
 
         if (hayNovedadesParaAlarma && !silenciado) sonidoAlerta.play().catch(() => {});
 
-        // Limpiar nodos que ya no están activos
+        // Limpiar nodos que ya no están activos y registrar recuperación
         const idsActivos = new Set(criticosActuales.map(c => c.id));
-        for (let id of registroNodos.keys()) { if (!idsActivos.has(id)) registroNodos.delete(id); }
+        for (let [id, data] of registroNodos.entries()) {
+            if (!idsActivos.has(id)) {
+                if (!modoCargaInicial) {
+                    registrarLog('recuperado', id, {
+                        off: data.offAnterior,
+                        pDown: data.pDownAnterior
+                    });
+                }
+                registroNodos.delete(id);
+            }
+        }
 
         modoCargaInicial = false;
 
