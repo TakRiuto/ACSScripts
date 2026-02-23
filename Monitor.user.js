@@ -2,7 +2,7 @@
 // @name         OLT Monitor Maestro
 // @namespace    Violentmonkey Scripts
 // @match        *://190.153.58.82/monitoring/olt/*
-// @version      9.5
+// @version      9.6
 // @inject-into  content
 // @run-at       document-end
 // @author       Ing. Adrian Leon
@@ -41,6 +41,18 @@
     const registroNodos = new Map();
     const sonidoAlerta = new Audio('http://soundbible.com/grab.php?id=2214&type=mp3');
     let silenciado = false;
+    // Forzar autorización de audio por parte del navegador
+    let audioAutorizado = false;
+    document.addEventListener('click', () => {
+        if (!audioAutorizado) {
+            sonidoAlerta.play().then(() => {
+                sonidoAlerta.pause();
+                sonidoAlerta.currentTime = 0;
+                audioAutorizado = true;
+                console.log('✅ Motor de audio autorizado por el navegador.');
+            }).catch(() => {});
+    }
+}, { once: true });
 
     // Bucle de sonido: al terminar, se relanza si no está silenciado
     sonidoAlerta.addEventListener('ended', () => {
@@ -483,6 +495,15 @@
         // Actualizar título y favicon de la pestaña
         actualizarPestana(oltActual, criticosActuales.length, hayAlgoSinLeer);
     }
+    const workerCode = `
+      setInterval(() => {
+          postMessage('tick');
+      }, 2500);
+  `;
+  const blob = new Blob([workerCode], { type: 'application/javascript' });
+  const worker = new Worker(URL.createObjectURL(blob));
 
-    setInterval(procesarNodos, 2500);
+  worker.onmessage = function() {
+      procesarNodos();
+};
 })();
