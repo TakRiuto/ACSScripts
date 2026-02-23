@@ -228,10 +228,10 @@
                         <span style="font-size:10px;color:#aaa;font-weight:bold;">TIPO DE ALARMA:</span>
                         <select id="selector-alarma" class="ctrl" style="width:100%;">
                             <option value="placeholder1">🔔 Modo A</option>
-                            <option value="alarm">👂 Alarma</option>
+                            <option value="alarm" selected>👂 Alarma</option>
                             <option value="alarmabrazil">🇧🇷 Brazil</option>
                             <option value="alarmhard">🐔 Intenso</option>
-                            <option value="chevette99" selected>⚡ Chevette 99</option>
+                            <option value="chevette99">⚡ Chevette 99</option>
                         </select>
                         <div style="display:flex;gap:5px;">
                             <select id="umbral-tipo" class="ctrl" style="flex:1;">
