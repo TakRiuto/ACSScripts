@@ -2,7 +2,7 @@
 // @name         OLT Monitor Maestro
 // @namespace    Violentmonkey Scripts
 // @match        *://190.153.58.82/monitoring/olt/*
-// @version      11.8
+// @version      12
 // @inject-into  content
 // @run-at       document-end
 // @author       Ing. Adrian Leon
