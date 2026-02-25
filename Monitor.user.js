@@ -2,7 +2,7 @@
 // @name         OLT Monitor Maestro
 // @namespace    Violentmonkey Scripts
 // @match        *://190.153.58.82/monitoring/olt/*
-// @version      13.2
+// @version      13.3
 // @inject-into  content
 // @run-at       document-end
 // @author       Ing. Adrian Leon
@@ -15,8 +15,8 @@
 
 (async function() {
     'use strict';
-    // Guard: no ejecutar dentro de iframes del Dashboard
     if (window.self !== window.top) return;
+
     // --- CARGA DB ---
     let DB_NODOS = {};
     try {
@@ -38,8 +38,17 @@
     let umbralValor = parseFloat(localStorage.getItem('oltUmbralValor')) || 30;
     let umbralTipo = localStorage.getItem('oltUmbralTipo') || 'porcentaje';
     let filtroOp = 'TODOS';
+    let alarmasActivas = localStorage.getItem('oltAlarmasActivas') !== 'false'; // por defecto true
 
-    const registroNodos = new Map();
+    // Memoria de estados (todos los nodos vistos)
+    const memoriaNodos = new Map();
+    const registroNodos = new Map(); // solo críticos
+
+    // Estabilización
+    const TICKS_ESTABLES = 3;
+    let ticksEstables = 0;
+    let ultimoCount = -1;
+    let oltEstable = false;
 
     // --- AUDIOS DE ALARMA ---
     const AUDIOS = {
@@ -49,24 +58,21 @@
         alarmhard:    new Audio('https://www.myinstants.com/media/sounds/chicken-on-tree-screaming.mp3'),
         chevette99:   new Audio('http://soundbible.com/grab.php?id=2214&type=mp3')
     };
-    // Loop nativo + precarga en todos
     Object.values(AUDIOS).forEach(a => { a.preload = 'auto'; a.loop = true; });
 
-    // Persistir selección de alarma
     const alarmaGuardada = localStorage.getItem('oltAlarmaSeleccionada') || 'alarm';
     let sonidoAlerta = AUDIOS[alarmaGuardada] || AUDIOS.alarm;
 
     let silenciado = false;
     let muteGlobal = localStorage.getItem('oltMuteGlobal') === 'true';
 
-    // Desbloquear todos los audios en el primer click del usuario
     let audioAutorizado = false;
     document.addEventListener('click', () => {
         if (!audioAutorizado) {
             audioAutorizado = true;
-            Object.values(AUDIOS).forEach(a => {
-                a.play().then(() => { a.pause(); a.currentTime = 0; }).catch(() => {});
-            });
+            // Usar un audio mudo para activar el contexto
+            const s = new Audio(); s.volume = 0;
+            s.play().then(() => s.pause()).catch(() => {});
         }
     }, { once: true });
 
@@ -87,12 +93,18 @@
     }
 
     function exportarLog() {
+        const filtroOpActual = document.getElementById('filtro-op')?.value || 'TODOS';
+        let entradasFiltradas = logEntradas;
+        if (filtroOpActual !== 'TODOS') {
+            entradasFiltradas = entradasFiltradas.filter(e => e.datos.op === filtroOpActual);
+        }
         const lineas = [`OLT: ${oltActual}`, `Exportado: ${timestamp()}`, '─'.repeat(60)];
-        logEntradas.forEach(e => {
+        entradasFiltradas.forEach(e => {
             const base = `[${e.ts}] ${e.nodo}`;
             if (e.tipo === 'inicial')      lineas.push(`${base} | INICIO    | Total:${e.datos.total} ON:${e.datos.on} OFF:${e.datos.off} (${e.datos.pDown}% caída)`);
             if (e.tipo === 'nueva_alarma') lineas.push(`${base} | ALARMA    | Total:${e.datos.total} ON:${e.datos.on} OFF:${e.datos.off} (${e.datos.pDown}% caída)`);
             if (e.tipo === 'empeora')      lineas.push(`${base} | EMPEORA   | OFF:${e.datos.offAntes}→${e.datos.off} (${e.datos.pDownAntes}%→${e.datos.pDown}%)`);
+            if (e.tipo === 'mejora')       lineas.push(`${base} | MEJORA    | OFF:${e.datos.offAntes}→${e.datos.off} (${e.datos.pDownAntes}%→${e.datos.pDown}%)`);
             if (e.tipo === 'recuperado')   lineas.push(`${base} | RECUPERADO| Estaba OFF:${e.datos.off} (${e.datos.pDown}%)`);
         });
         const blob = new Blob([lineas.join('\n')], { type: 'text/plain' });
@@ -103,20 +115,22 @@
     }
 
     function exportarCSV() {
-        // Etiquetas de estado legibles
         const ESTATUS = {
             inicial:     'INICIO',
             nueva_alarma:'ALARMA',
             empeora:     'EMPEORA',
+            mejora:      'MEJORA',
             recuperado:  'RECUPERADO'
         };
-
+        const filtroOpActual = document.getElementById('filtro-op')?.value || 'TODOS';
+        let entradasFiltradas = logEntradas;
+        if (filtroOpActual !== 'TODOS') {
+            entradasFiltradas = entradasFiltradas.filter(e => e.datos.op === filtroOpActual);
+        }
         const encabezado = ['Fecha','Hora','OLT','Nodo','Ubicacion','Operadora','Estatus','Clientes Caidos','Clientes Caidos Antes','Clientes Totales','Porcentaje Caida'];
 
-        const filas = logEntradas.map(e => {
-            // Separar fecha y hora del timestamp "DD/MM/YYYY HH:MM:SS"
+        const filas = entradasFiltradas.map(e => {
             const [fecha, hora] = e.ts.split(' ');
-
             const zona = e.datos.zona || '';
             const op   = e.datos.op   || '';
             const estatus = ESTATUS[e.tipo] || e.tipo;
@@ -130,7 +144,7 @@
                 caidos    = e.datos.off   ?? '';
                 totales   = e.datos.total ?? '';
                 porcCaida = e.datos.pDown != null ? `${e.datos.pDown}%` : '';
-            } else if (e.tipo === 'empeora') {
+            } else if (e.tipo === 'empeora' || e.tipo === 'mejora') {
                 caidos      = e.datos.off      ?? '';
                 caidosAntes = e.datos.offAntes  ?? '';
                 totales     = e.datos.total     ?? '';
@@ -140,7 +154,6 @@
                 porcCaida = e.datos.pDown != null ? `${e.datos.pDown}%` : '';
             }
 
-            // Escapar campos que puedan contener comas
             const esc = v => `"${String(v).replace(/"/g, '""')}"`;
 
             return [
@@ -151,7 +164,6 @@
         });
 
         const csv = [encabezado.join(','), ...filas].join('\n');
-        // BOM UTF-8 para que Excel lo abra correctamente con tildes
         const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
         const a = document.createElement('a');
         a.href = URL.createObjectURL(blob);
@@ -166,14 +178,14 @@
             contenedor.innerHTML = '<div style="color:#aaa; text-align:center; padding:20px; font-size:11px;">Sin eventos registrados.</div>';
             return;
         }
-        const colores = { inicial: '#555', nueva_alarma: '#ed5565', empeora: '#e67e22', recuperado: '#1ab394' };
-        const iconos  = { inicial: '📋', nueva_alarma: '🔴', empeora: '📉', recuperado: '✅' };
-        const labels  = { inicial: 'INICIO', nueva_alarma: 'ALARMA', empeora: 'EMPEORA', recuperado: 'RECUPERADO' };
+        const colores = { inicial: '#555', nueva_alarma: '#ed5565', empeora: '#e67e22', mejora: '#f1c40f', recuperado: '#1ab394' };
+        const iconos  = { inicial: '📋', nueva_alarma: '🔴', empeora: '📉', mejora: '📈', recuperado: '✅' };
+        const labels  = { inicial: 'INICIO', nueva_alarma: 'ALARMA', empeora: 'EMPEORA', mejora: 'MEJORA', recuperado: 'RECUPERADO' };
         contenedor.innerHTML = logEntradas.map(e => {
             let detalle = '';
             if (e.tipo === 'inicial' || e.tipo === 'nueva_alarma')
                 detalle = `Total:${e.datos.total} ON:${e.datos.on} OFF:${e.datos.off} <b>${e.datos.pDown}%↓</b>`;
-            if (e.tipo === 'empeora')
+            if (e.tipo === 'empeora' || e.tipo === 'mejora')
                 detalle = `OFF: ${e.datos.offAntes}→<b>${e.datos.off}</b> | ${e.datos.pDownAntes}%→<b>${e.datos.pDown}%</b>`;
             if (e.tipo === 'recuperado')
                 detalle = `Estaba OFF:${e.datos.off} (${e.datos.pDown}%)`;
@@ -293,6 +305,16 @@
                 <div id="vista-alarmas">
                     <div style="background:rgba(255,255,255,0.05);padding:8px;margin-bottom:10px;border-radius:4px;display:flex;flex-direction:column;gap:5px;">
 
+                        <!-- NUEVO: Toggle de activación de alarmas -->
+                        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:5px;">
+                            <span style="font-size:10px;color:#aaa;font-weight:bold;">🚨 Centro de Alarmas</span>
+                            <label class="switch" style="position:relative;display:inline-block;width:36px;height:20px;">
+                                <input type="checkbox" id="toggle-alarmas" ${alarmasActivas ? 'checked' : ''} style="opacity:0;width:0;height:0;">
+                                <span style="position:absolute;cursor:pointer;inset:0;background:#333;transition:.3s;border-radius:20px;"></span>
+                                <span style="position:absolute;content:'';height:16px;width:16px;left:2px;bottom:2px;background:white;transition:.3s;border-radius:50%; transform: ${alarmasActivas ? 'translateX(16px)' : 'none'}; background-color: ${alarmasActivas ? '#1ab394' : 'white'};"></span>
+                            </label>
+                        </div>
+
                         <span style="font-size:10px;color:#aaa;font-weight:bold;">TIPO DE ALARMA:</span>
                         <div style="display:flex;gap:4px;align-items:center;">
                             <select id="selector-alarma" class="ctrl" style="flex:1;">
@@ -339,7 +361,6 @@
             </div>
         `;
 
-        // Agregar estilos de tabs via CSS para no repetir inline
         const tabStyle = document.createElement('style');
         tabStyle.innerHTML = `
             .tab-btn { flex:1; padding:4px 0; font-size:10px; font-weight:bold; border:none; border-radius:3px; cursor:pointer; }
@@ -359,6 +380,22 @@
         // --- Valores iniciales ---
         document.getElementById('umbral-valor').value = umbralValor;
         document.getElementById('umbral-tipo').value  = umbralTipo;
+        document.getElementById('selector-alarma').value = alarmaGuardada;
+
+        // --- Toggle de activación de alarmas ---
+        const toggleAlarmas = document.getElementById('toggle-alarmas');
+        toggleAlarmas.checked = alarmasActivas;
+        toggleAlarmas.addEventListener('change', function() {
+            alarmasActivas = this.checked;
+            localStorage.setItem('oltAlarmasActivas', alarmasActivas);
+            if (!alarmasActivas) {
+                // Limpiar críticos y detener sonido
+                registroNodos.clear();
+                criticosGlobales = [];
+                detenerSonido();
+                renderizarDetector();
+            }
+        });
 
         // --- Config umbral ---
         const actualizarConfiguracion = () => {
@@ -367,57 +404,49 @@
             localStorage.setItem('oltUmbralValor', umbralValor);
             localStorage.setItem('oltUmbralTipo',  umbralTipo);
             modoCargaInicial = true;
+            oltEstable = false;
+            ticksEstables = 0;
+            ultimoCount = -1;
             registroNodos.clear();
+            memoriaNodos.clear();
         };
         document.getElementById('umbral-valor').addEventListener('change', actualizarConfiguracion);
         document.getElementById('umbral-tipo').addEventListener('change', actualizarConfiguracion);
 
         // --- Selector de alarma ---
-        const MAPA_ALARMA = { modo1:'modo1', alarm:'alarm', alarmabrazil:'alarmabrazil', alarmhard:'alarmhard', chevette99:'chevette99' };
-        // Restaurar selección guardada
         const selectAlarma = document.getElementById('selector-alarma');
-        selectAlarma.value = alarmaGuardada in MAPA_ALARMA ? alarmaGuardada : 'alarm';
-
         selectAlarma.addEventListener('change', function() {
-            const clave = MAPA_ALARMA[this.value] || 'alarm';
-            sonidoAlerta.pause();
-            sonidoAlerta.currentTime = 0;
-            sonidoAlerta = AUDIOS[clave];
+            detenerSonido();
+            sonidoAlerta = AUDIOS[this.value] || AUDIOS.alarm;
             localStorage.setItem('oltAlarmaSeleccionada', this.value);
-            // Si hay alarmas activas sin leer, arrancar el nuevo audio inmediatamente
-            const hayActivas = [...registroNodos.values()].some(d => !d.reconocido);
-            if (hayActivas && !silenciado && !muteGlobal) sonidoAlerta.play().catch(() => {});
         });
 
-        // --- Botones tester ▶ ■ ---
-        let enPrueba = false;
+        // --- Botones tester ---
         document.getElementById('btn-test-play').onclick = () => {
-            if (silenciado || muteGlobal) return; // respetar silencio
+            if (silenciado || muteGlobal) return;
             detenerSonido();
-            enPrueba = true;
             sonidoAlerta.play().catch(() => {});
-            document.getElementById('btn-test-play').textContent = '🔊';
         };
-        document.getElementById('btn-test-stop').onclick = () => {
-            enPrueba = false;
-            detenerSonido();
-            document.getElementById('btn-test-play').textContent = '▶';
-        };
+        document.getElementById('btn-test-stop').onclick = detenerSonido;
 
         // --- Filtro operadora ---
-        document.getElementById('filtro-op').addEventListener('change', function() { filtroOp = this.value; });
+        document.getElementById('filtro-op').addEventListener('change', function() { 
+            filtroOp = this.value; 
+            renderizarDetector();
+        });
 
         // --- Marcar vistos ---
         document.getElementById('btn-marcar-todos').onclick = () => {
             for (let data of registroNodos.values()) data.reconocido = true;
             detenerSonido();
+            renderizarDetector();
         };
 
-        // --- Botón silenciar con timer y modo secreto ---
+        // --- Botón silenciar ---
         let clicksRapidos = 0;
         let timerClickReset = null;
         let timerMuteTemporal = null;
-        let muteExpiraEn = null; // timestamp absoluto
+        let muteExpiraEn = null;
 
         function aplicarMuteEstado() {
             const statusEl = document.getElementById('mute-status');
@@ -425,7 +454,6 @@
             if (!statusEl || !btnSil) return;
 
             if (muteGlobal) {
-                // Permanente
                 btnSil.style.background = '#7d3c98';
                 btnSil.style.borderColor = '#9b59b6';
                 btnSil.style.color = 'white';
@@ -433,7 +461,6 @@
                 statusEl.style.color = '#9b59b6';
                 statusEl.textContent = '🔒 Silencio permanente activo';
             } else if (silenciado && muteExpiraEn) {
-                // Temporal: mostrar cuenta regresiva
                 btnSil.style.background = '#784212';
                 btnSil.style.borderColor = '#e67e22';
                 btnSil.style.color = 'white';
@@ -442,7 +469,6 @@
                 const minRestantes = Math.ceil((muteExpiraEn - Date.now()) / 60000);
                 statusEl.textContent = `⏱ Silenciado ${minRestantes}min restantes`;
             } else {
-                // Activo / sin silencio
                 btnSil.style.background = '#333';
                 btnSil.style.borderColor = '#555';
                 btnSil.style.color = '#ccc';
@@ -450,17 +476,14 @@
             }
         }
 
-        // Actualizar countdown cada minuto
         setInterval(aplicarMuteEstado, 30000);
 
         document.getElementById('btn-silenciar').addEventListener('click', () => {
-            // Contar clicks rápidos para modo secreto
             clicksRapidos++;
             clearTimeout(timerClickReset);
             timerClickReset = setTimeout(() => { clicksRapidos = 0; }, 1000);
 
             if (clicksRapidos >= 5) {
-                // MODO SECRETO — silencio permanente
                 clicksRapidos = 0;
                 clearTimeout(timerMuteTemporal);
                 muteExpiraEn = null;
@@ -473,7 +496,6 @@
             }
 
             if (muteGlobal) {
-                // Desactivar permanente
                 clicksRapidos = 0;
                 muteGlobal = false;
                 silenciado = false;
@@ -484,7 +506,6 @@
             }
 
             if (silenciado && muteExpiraEn) {
-                // Desactivar temporal
                 clearTimeout(timerMuteTemporal);
                 timerMuteTemporal = null;
                 silenciado = false;
@@ -493,7 +514,6 @@
                 return;
             }
 
-            // Activar silencio temporal 60min
             const DURACION_MS = 60 * 60 * 1000;
             muteExpiraEn = Date.now() + DURACION_MS;
             silenciado = true;
@@ -507,7 +527,6 @@
             aplicarMuteEstado();
         });
 
-        // Restaurar mute permanente si venía guardado
         if (muteGlobal) aplicarMuteEstado();
 
         // --- Exportar log ---
@@ -534,7 +553,6 @@
         // --- Toggle panel ---
         document.getElementById('panel-header').onclick = function(e) {
             if (e.target.id === 'btn-flotante') return;
-            // En modo flotante no permitir minimizar
             if (modoFlotante) return;
             const content = document.getElementById('alert-content');
             const abriendo = content.style.display === 'none';
@@ -543,7 +561,6 @@
             document.getElementById('toggle-btn').innerText = abriendo ? '−' : '+';
             panelAbiertoAt = abriendo ? Date.now() : 0;
 
-            // Habilitar/deshabilitar botón flotante según estado del panel
             const btnFlotante = document.getElementById('btn-flotante');
             btnFlotante.style.opacity = abriendo ? '0.6' : '0.2';
             btnFlotante.style.pointerEvents = abriendo ? 'auto' : 'none';
@@ -551,10 +568,8 @@
 
         // --- Modo flotante ---
         let modoFlotante = false;
-
         document.getElementById('btn-flotante').addEventListener('click', (e) => {
             e.stopPropagation();
-            // Solo funciona si el panel está abierto
             const content = document.getElementById('alert-content');
             if (content.style.display === 'none' && !modoFlotante) return;
 
@@ -571,7 +586,6 @@
                 panel.style.borderRadius = '8px';
                 btn.title = 'Volver a anclado';
                 btn.style.opacity = '1';
-                // Ocultar toggle −/+ en modo flotante para que no confunda
                 document.getElementById('toggle-btn').style.display = 'none';
                 document.getElementById('alert-content').style.display = 'block';
             } else {
@@ -606,14 +620,32 @@
         if (oltName !== oltActual) {
             oltActual = oltName;
             modoCargaInicial = true;
+            oltEstable = false;
+            ticksEstables = 0;
+            ultimoCount = -1;
             logEntradas = [];
             registroNodos.clear();
+            memoriaNodos.clear();
         }
 
         const filas = document.querySelectorAll('tr');
         const criticosActuales = [];
         const ahora = Date.now();
-        let hayNovedadesParaAlarma = false;
+        let huboNuevaAlarma = false;
+
+        // Determinar si la OLT está estable (misma cantidad de nodos durante varios ciclos)
+        const nodosCount = filas.length;
+        if (!oltEstable) {
+            if (nodosCount === ultimoCount) {
+                if (++ticksEstables >= TICKS_ESTABLES) {
+                    oltEstable = true;
+                    modoCargaInicial = true; // un último ciclo como inicial
+                }
+            } else {
+                ticksEstables = 0;
+                ultimoCount = nodosCount;
+            }
+        }
 
         filas.forEach(fila => {
             const celdas = fila.querySelectorAll('td');
@@ -638,14 +670,13 @@
                 const pDown = ((off / total) * 100).toFixed(1);
                 const pUp   = ((on  / total) * 100).toFixed(1);
                 const idNodo = `${oltName}${slotStr}${portStr}A`;
-                const superaUmbral = umbralTipo === 'porcentaje' ? pDown >= umbralValor : off >= umbralValor;
+                const superaUmbral = umbralTipo === 'porcentaje' ? parseFloat(pDown) >= umbralValor : off >= umbralValor;
 
                 const etiquetas = celdaPort.querySelectorAll('.gpon-util .label');
                 let labelPrincipal = null;
                 if (etiquetas.length > 0) {
                     labelPrincipal = etiquetas[0];
                     labelPrincipal.innerHTML = `<div style="line-height:1.1;"><b style="font-size:11px;">${pDown}% DN</b><br><span style="font-size:9px;">${pUp}% UP</span></div>`;
-                    // Ocultar etiquetas intermedias pero preservar label-success (botón de gráfica)
                     for (let j = 1; j < etiquetas.length; j++) {
                         if (!etiquetas[j].classList.contains('label-success')) {
                             etiquetas[j].style.display = 'none';
@@ -653,29 +684,45 @@
                     }
                 }
 
-                if (superaUmbral) {
-                    const info = DB_NODOS[idNodo] || { op: "---", zona: "S/I" };
-                    const datosNodo = { total, on, off, pDown, pUp, zona: info.zona, op: info.op };
+                const info = DB_NODOS[idNodo] || { op: "---", zona: "S/I" };
+                const datosNodo = { total, on, off, pDown, pUp, zona: info.zona, op: info.op };
+                const memoriaPrevia = memoriaNodos.get(idNodo);
 
+                // Guardar en memoria global
+                memoriaNodos.set(idNodo, { off, on, total, pDown });
+
+                const esInicial = modoCargaInicial || !memoriaPrevia;
+                const comoInicial = esInicial || !oltEstable; // si la OLT no está estable, tratar como inicial
+
+                if (superaUmbral) {
                     if (!registroNodos.has(idNodo)) {
+                        const offPrev = memoriaPrevia ? memoriaPrevia.off : 0;
+                        const pDownPrev = memoriaPrevia ? memoriaPrevia.pDown : '0';
                         registroNodos.set(idNodo, {
-                            origen: modoCargaInicial ? 'inicial' : 'nuevo',
-                            reconocido: modoCargaInicial,
+                            origen: comoInicial ? 'inicial' : 'nuevo',
+                            reconocido: comoInicial,
                             timestamp: ahora,
-                            offAnterior: off,
-                            pDownAnterior: pDown
+                            offAnterior: comoInicial ? off : offPrev,
+                            pDownAnterior: comoInicial ? pDown : pDownPrev
                         });
-                        if (modoCargaInicial) {
+                        if (comoInicial) {
                             registrarLog('inicial', idNodo, datosNodo);
                         } else {
-                            hayNovedadesParaAlarma = true;
-                            silenciado = false;
-                            registrarLog('nueva_alarma', idNodo, datosNodo);
+                            huboNuevaAlarma = true;
+                            registrarLog('nueva_alarma', idNodo, { ...datosNodo, offPrev, onPrev: memoriaPrevia?.on || total, pDownPrev });
                         }
                     } else {
                         const data = registroNodos.get(idNodo);
                         if (off > data.offAnterior) {
                             registrarLog('empeora', idNodo, {
+                                ...datosNodo,
+                                offAntes: data.offAnterior,
+                                pDownAntes: data.pDownAnterior
+                            });
+                            data.offAnterior = off;
+                            data.pDownAnterior = pDown;
+                        } else if (off < data.offAnterior) {
+                            registrarLog('mejora', idNodo, {
                                 ...datosNodo,
                                 offAntes: data.offAnterior,
                                 pDownAntes: data.pDownAnterior
@@ -702,24 +749,36 @@
                         labelPrincipal.className = "label";
                         labelPrincipal.style.cssText = `display:inline-block!important;width:68px!important;background-color:#1ab394!important;color:white!important;border-radius:4px;text-align:center;`;
                     }
+                    // Si estaba en registroNodos, se recuperó
+                    if (registroNodos.has(idNodo)) {
+                        const data = registroNodos.get(idNodo);
+                        registrarLog('recuperado', idNodo, { off: data.offAnterior, pDown: data.pDownAnterior, zona: info.zona, op: info.op });
+                        registroNodos.delete(idNodo);
+                    }
                 }
             }
         });
 
-        if (hayNovedadesParaAlarma && !silenciado && !muteGlobal) sonidoAlerta.play().catch(() => {});
-
-        // Recuperados
+        // Verificar nodos que ya no están (desaparecieron)
         const idsActivos = new Set(criticosActuales.map(c => c.id));
         for (let [id, data] of registroNodos.entries()) {
             if (!idsActivos.has(id)) {
-                if (!modoCargaInicial) registrarLog('recuperado', id, { off: data.offAnterior, pDown: data.pDownAnterior });
+                const info = DB_NODOS[id] || { op: "---", zona: "S/I" };
+                registrarLog('recuperado', id, { off: data.offAnterior, pDown: data.pDownAnterior, zona: info.zona, op: info.op });
                 registroNodos.delete(id);
             }
         }
 
+        // Reproducir sonido solo si el toggle está activado y hay nueva alarma
+        if (huboNuevaAlarma && alarmasActivas && !silenciado && !muteGlobal) {
+            sonidoAlerta.play().catch(() => {});
+        } else if (!huboNuevaAlarma) {
+            detenerSonido();
+        }
+
         modoCargaInicial = false;
 
-        // Poblar selector operadoras
+        // Poblar selector de operadoras
         const selectOp = document.getElementById('filtro-op');
         if (selectOp) {
             const opsEnOlt = [...new Set(criticosActuales.map(c => c.op).filter(Boolean))].sort();
@@ -737,7 +796,22 @@
             }
         }
 
-        // Filtrar y renderizar
+        // Renderizar panel de alarmas
+        renderizarDetector(criticosActuales);
+        actualizarPestana(oltActual, criticosActuales.length, criticosActuales.some(c => c.esNuevoParaPanel));
+    }
+
+    function renderizarDetector(criticosActuales) {
+        const listContainer = document.getElementById('alert-list');
+        if (!listContainer) return;
+
+        if (!alarmasActivas) {
+            listContainer.innerHTML = '<div style="color:#aaa;text-align:center;padding:40px;font-size:12px;">🚫 Centro de alarmas desactivado</div>';
+            document.getElementById('alert-count').innerText = '0';
+            document.getElementById('btn-marcar-todos').style.display = 'none';
+            return;
+        }
+
         const criticosFiltrados = filtroOp === 'TODOS' ? criticosActuales : criticosActuales.filter(c => c.op === filtroOp);
         const badgeContador = document.getElementById('alert-count');
         const btnMarcar     = document.getElementById('btn-marcar-todos');
@@ -747,31 +821,26 @@
         hayAlgoSinLeer ? badgeContador.classList.add('header-blink') : badgeContador.classList.remove('header-blink');
         btnMarcar.style.display = hayAlgoSinLeer ? 'inline-block' : 'none';
 
-        const listContainer = document.getElementById('alert-list');
-        if (listContainer) {
-            const nuevoHTML = criticosFiltrados.length > 0
-                ? criticosFiltrados.map(c => `
-                    <div class="${c.esNuevoParaPanel ? 'tarjeta-panel-blink' : ''}" style="margin-bottom:10px;padding:9px;border-left:5px solid #ed5565;background:rgba(255,255,255,0.05);border-radius:0 5px 5px 0;">
-                        <div style="display:flex;align-items:center;justify-content:space-between;">
-                            <span style="color:#1ab394;font-weight:900;font-size:14px;letter-spacing:0.5px;">${c.id}</span>
-                            ${c.esNuevoParaPanel ? '<span class="badge-nuevo">NUEVO</span>' : ''}
-                        </div>
-                        <div style="font-size:10px;color:#ddd;margin:3px 0;">📍 ${c.zona} | 🏢 ${c.op}</div>
-                        <div style="margin-top:5px;color:#ed5565;font-size:11px;font-weight:bold;">
-                            ⚠️ ${c.down}% caída | 🔴 OFF:${c.off} | 👥 ${c.total}
-                        </div>
-                    </div>`).join('')
-                : criticosActuales.length > 0
-                    ? `<div style="color:#aaa;text-align:center;padding:20px;font-size:11px;">Sin alarmas para <b>${filtroOp}</b></div>`
-                    : '<div style="color:#1ab394;text-align:center;padding:20px;font-weight:bold;">SISTEMA OK ✅</div>';
+        const nuevoHTML = criticosFiltrados.length > 0
+            ? criticosFiltrados.map(c => `
+                <div class="${c.esNuevoParaPanel ? 'tarjeta-panel-blink' : ''}" style="margin-bottom:10px;padding:9px;border-left:5px solid #ed5565;background:rgba(255,255,255,0.05);border-radius:0 5px 5px 0;">
+                    <div style="display:flex;align-items:center;justify-content:space-between;">
+                        <span style="color:#1ab394;font-weight:900;font-size:14px;letter-spacing:0.5px;">${c.id}</span>
+                        ${c.esNuevoParaPanel ? '<span class="badge-nuevo">NUEVO</span>' : ''}
+                    </div>
+                    <div style="font-size:10px;color:#ddd;margin:3px 0;">📍 ${c.zona} | 🏢 ${c.op}</div>
+                    <div style="margin-top:5px;color:#ed5565;font-size:11px;font-weight:bold;">
+                        ⚠️ ${c.down}% caída | 🔴 OFF:${c.off} | 👥 ${c.total}
+                    </div>
+                </div>`).join('')
+            : criticosActuales.length > 0
+                ? `<div style="color:#aaa;text-align:center;padding:20px;font-size:11px;">Sin alarmas para <b>${filtroOp}</b></div>`
+                : '<div style="color:#1ab394;text-align:center;padding:20px;font-weight:bold;">SISTEMA OK ✅</div>';
 
-            if (listContainer.innerHTML !== nuevoHTML) listContainer.innerHTML = nuevoHTML;
-        }
-
-        actualizarPestana(oltActual, criticosActuales.length, hayAlgoSinLeer);
+        if (listContainer.innerHTML !== nuevoHTML) listContainer.innerHTML = nuevoHTML;
     }
 
-    // Worker para ticks sin throttling de pestañas inactivas
+    // Worker para ticks sin throttling
     const worker = new Worker(URL.createObjectURL(
         new Blob([`setInterval(()=>postMessage('tick'),2500)`], { type:'application/javascript' })
     ));
