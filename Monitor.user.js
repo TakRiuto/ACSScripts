@@ -2,7 +2,7 @@
 // @name         OLT Monitor Maestro
 // @namespace    Violentmonkey Scripts
 // @match        *://190.153.58.82/monitoring/olt/*
-// @version      13.0
+// @version      13.2
 // @inject-into  content
 // @run-at       document-end
 // @author       Ing. Adrian Leon
@@ -15,7 +15,8 @@
 
 (async function() {
     'use strict';
-
+    // Guard: no ejecutar dentro de iframes del Dashboard
+    if (window.self !== window.top) return;
     // --- CARGA DB ---
     let DB_NODOS = {};
     try {
