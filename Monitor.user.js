@@ -39,6 +39,7 @@
     let logBusqueda = '';
     let escala = parseFloat(localStorage.getItem('oltPanelEscala')) || 1;
 
+    // Estados del panel: 'minimizado', 'abierto', 'flotante'
     let panelState = 'minimizado';
     let modoPreferido = localStorage.getItem('oltModoPreferido') || 'abierto';
 
@@ -305,6 +306,7 @@
             max-height: 60vh;
         }
         #olt-alert-panel {
+            box-sizing: border-box;
             transition: width 0.25s ease, padding 0.25s ease, font-size 0.25s ease;
         }
         #olt-alert-panel.modo-flotante {
@@ -365,8 +367,11 @@
             display: none;
         }
         @media (max-width: 768px) {
-            #btn-flotante {
-                display: none;
+            #olt-alert-panel.panel-abierto {
+                width: calc(100% - 20px) !important; /* 10px de margen a cada lado */
+                max-width: 300px; /* opcional, para que no se estire demasiado en tablets pequeñas */
+                left: 10px !important; /* centrado con margen izquierdo */
+                /* Si prefieres centrarlo exactamente, usa left: 50%; transform: translateX(-50%); pero necesitarías quitar el left fijo de abierto */
             }
         }
 
@@ -468,6 +473,8 @@
             </div>
         `;
 
+        // No es necesario crear tabStyle aparte, ya está en CSS
+
         Object.assign(panel.style, {
             position: 'fixed',
             bottom: '20px',
@@ -505,6 +512,7 @@
             const btnFlotante = document.getElementById('btn-flotante');
             if (estado === 'flotante') {
                 panel.classList.add('modo-flotante');
+                panel.classList.remove('panel-abierto');
                 panel.style.width = '1040px';
                 panel.style.padding = '18px';
                 panel.style.fontSize = '15px';
@@ -516,10 +524,11 @@
                 btnFlotante.title = 'Salir de modo flotante';
             } else if (estado === 'abierto') {
                 panel.classList.remove('modo-flotante');
+                panel.classList.add('panel-abierto');
                 panel.style.width = '300px';
                 panel.style.padding = '12px';
                 panel.style.fontSize = '';
-                panel.style.zoom = '';
+                panel.style.zoom = ''; // reset zoom
                 content.classList.add('panel-abierto');
                 content.style.maxHeight = '';
                 btnToggle.style.display = 'inline';
@@ -532,7 +541,7 @@
                 panel.style.padding = '12px';
                 panel.style.fontSize = '';
                 panel.style.zoom = '';
-                content.classList.remove('panel-abierto');
+                content.classList.remove('modo-flotante', 'panel-abierto');
                 content.style.maxHeight = '';
                 btnToggle.style.display = 'inline';
                 btnToggle.innerText = '+';
@@ -572,6 +581,7 @@
             enPrueba = true;
             sonidoAlerta.play()
                 .catch(() => {
+                    // Mostrar error temporal en el panel
                     const statusEl = document.getElementById('mute-status');
                     if (statusEl) {
                         const originalHtml = statusEl.innerHTML;
@@ -598,6 +608,7 @@
             filtroOp = this.value;
             localStorage.setItem('oltFiltroOp', filtroOp);
         });
+        // Establecer valor inicial del select
         document.getElementById('filtro-op').value = filtroOp;
 
         document.getElementById('btn-marcar-todos').onclick = () => {
@@ -606,6 +617,7 @@
             detenerSonido();
         };
 
+        // --- Botón silenciar ---
         let clicksRapidos = 0;
         let timerClickReset = null;
         let timerMuteTemporal = null;
@@ -616,9 +628,11 @@
             const btnSil = document.getElementById('btn-silenciar');
             if (!statusEl || !btnSil) return;
 
+            // Limpiar clases del botón
             btnSil.classList.remove('mute-permanente', 'mute-temporal', 'mute-off');
+            // Al mensaje solo le asignamos una clase fija para texto neutro (y le quitamos las de color por si acaso)
             statusEl.classList.remove('mute-permanente', 'mute-temporal');
-            statusEl.classList.add('mute-status-text');
+            statusEl.classList.add('mute-status-text'); // clase nueva
 
             if (muteGlobal) {
                 btnSil.classList.add('mute-permanente');
@@ -885,6 +899,7 @@
                 });
                 selectOp.value = opsEnOlt.includes(selAnterior) ? selAnterior : 'TODOS';
                 filtroOp = selectOp.value;
+                // Guardar en localStorage (opcional, pero consistente)
                 localStorage.setItem('oltFiltroOp', filtroOp);
             }
         }
