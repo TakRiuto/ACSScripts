@@ -2,7 +2,7 @@
 // @name         OLT Monitor Maestro
 // @namespace    Violentmonkey Scripts
 // @match        *://190.153.58.82/monitoring/olt/*
-// @version      13.8
+// @version      14
 // @inject-into  content
 // @run-at       document-end
 // @author       Ing. Adrian Leon
@@ -20,14 +20,13 @@
     // --- CARGA DB ---
     let DB_NODOS = {};
     try {
-        DB_NODOS = await fetch(
-            'https://raw.githubusercontent.com/TakRiuto/ACSScripts/refs/heads/release/nodos.json'
-        ).then(r => {
-            if (!r.ok) throw new Error(`HTTP ${r.status}`);
-            return r.json();
-        });
+        DB_NODOS = await fetch('https://raw.githubusercontent.com/TakRiuto/ACSScripts/refs/heads/release/nodos.json')
+            .then(r => {
+                if (!r.ok) throw new Error(`HTTP ${r.status}`);
+                return r.json();
+            });
         console.log('✅ DB_NODOS cargado:', Object.keys(DB_NODOS).length, 'nodos');
-    } catch(e) {
+    } catch (e) {
         console.error('❌ Error cargando nodos.json:', e);
     }
 
@@ -56,7 +55,6 @@
 
     let silenciado = false;
     let muteGlobal = localStorage.getItem('oltMuteGlobal') === 'true';
-    // FIX-B+C: variable para proteger el sonido durante prueba manual
     let enPrueba = false;
 
     let audioAutorizado = false;
@@ -75,8 +73,8 @@
 
     function timestamp() {
         const now = new Date();
-        const fecha = now.toLocaleDateString('es-VE', { day:'2-digit', month:'2-digit', year:'numeric' });
-        const hora  = now.toLocaleTimeString('es-VE', { hour:'2-digit', minute:'2-digit', second:'2-digit' });
+        const fecha = now.toLocaleDateString('es-VE', { day: '2-digit', month: '2-digit', year: 'numeric' });
+        const hora = now.toLocaleTimeString('es-VE', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
         return `${fecha} ${hora}`;
     }
 
@@ -89,15 +87,15 @@
         const lineas = [`OLT: ${oltActual}`, `Exportado: ${timestamp()}`, '─'.repeat(60)];
         logEntradas.forEach(e => {
             const base = `[${e.ts}] ${e.nodo}`;
-            if (e.tipo === 'inicial')      lineas.push(`${base} | INICIO    | Total:${e.datos.total} ON:${e.datos.on} OFF:${e.datos.off} (${e.datos.pDown}% caída)`);
+            if (e.tipo === 'inicial') lineas.push(`${base} | INICIO    | Total:${e.datos.total} ON:${e.datos.on} OFF:${e.datos.off} (${e.datos.pDown}% caída)`);
             if (e.tipo === 'nueva_alarma') lineas.push(`${base} | ALARMA    | Total:${e.datos.total} ON:${e.datos.on} OFF:${e.datos.off} (${e.datos.pDown}% caída)`);
-            if (e.tipo === 'empeora')      lineas.push(`${base} | EMPEORA   | OFF:${e.datos.offAntes}→${e.datos.off} (${e.datos.pDownAntes}%→${e.datos.pDown}%)`);
-            if (e.tipo === 'recuperado')   lineas.push(`${base} | RECUPERADO| Estaba OFF:${e.datos.off} (${e.datos.pDown}%)`);
+            if (e.tipo === 'empeora') lineas.push(`${base} | EMPEORA   | OFF:${e.datos.offAntes}→${e.datos.off} (${e.datos.pDownAntes}%→${e.datos.pDown}%)`);
+            if (e.tipo === 'recuperado') lineas.push(`${base} | RECUPERADO| Estaba OFF:${e.datos.off} (${e.datos.pDown}%)`);
         });
         const blob = new Blob([lineas.join('\n')], { type: 'text/plain' });
         const a = document.createElement('a');
         a.href = URL.createObjectURL(blob);
-        a.download = `log_${oltActual}_${new Date().toISOString().slice(0,10)}.txt`;
+        a.download = `log_${oltActual}_${new Date().toISOString().slice(0, 10)}.txt`;
         a.click();
     }
 
@@ -108,18 +106,20 @@
             empeora:     'EMPEORA',
             recuperado:  'RECUPERADO'
         };
-        const encabezado = ['Fecha','Hora','OLT','Nodo','Ubicacion','Operadora','Estatus','Clientes Caidos','Clientes Caidos Antes','Clientes Totales','Porcentaje Caida'];
+        const encabezado = ['Fecha', 'Hora', 'OLT', 'Nodo', 'Ubicacion', 'Operadora', 'Estatus', 'Clientes Caidos', 'Clientes Caidos Antes', 'Clientes Totales', 'Porcentaje Caida'];
         const filas = logEntradas.map(e => {
             const [fecha, hora] = e.ts.split(' ');
             const zona = e.datos.zona || '';
-            const op   = e.datos.op   || '';
+            const op = e.datos.op || '';
             const estatus = ESTATUS[e.tipo] || e.tipo;
             let caidos = '', caidosAntes = '', totales = '', porcCaida = '';
             if (e.tipo === 'inicial' || e.tipo === 'nueva_alarma') {
-                caidos = e.datos.off ?? ''; totales = e.datos.total ?? '';
+                caidos = e.datos.off ?? '';
+                totales = e.datos.total ?? '';
                 porcCaida = e.datos.pDown != null ? `${e.datos.pDown}%` : '';
             } else if (e.tipo === 'empeora') {
-                caidos = e.datos.off ?? ''; caidosAntes = e.datos.offAntes ?? '';
+                caidos = e.datos.off ?? '';
+                caidosAntes = e.datos.offAntes ?? '';
                 totales = e.datos.total ?? '';
                 porcCaida = e.datos.pDown != null ? `${e.datos.pDown}%` : '';
             } else if (e.tipo === 'recuperado') {
@@ -128,14 +128,14 @@
             }
             const esc = v => `"${String(v).replace(/"/g, '""')}"`;
             return [esc(fecha), esc(hora), esc(oltActual), esc(e.nodo),
-                    esc(zona), esc(op), esc(estatus),
-                    esc(caidos), esc(caidosAntes), esc(totales), esc(porcCaida)].join(',');
+                esc(zona), esc(op), esc(estatus),
+                esc(caidos), esc(caidosAntes), esc(totales), esc(porcCaida)].join(',');
         });
         const csv = [encabezado.join(','), ...filas].join('\n');
         const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
         const a = document.createElement('a');
         a.href = URL.createObjectURL(blob);
-        a.download = `log_${oltActual}_${new Date().toISOString().slice(0,10)}.csv`;
+        a.download = `log_${oltActual}_${new Date().toISOString().slice(0, 10)}.csv`;
         a.click();
     }
 
@@ -147,8 +147,8 @@
             return;
         }
         const colores = { inicial: '#555', nueva_alarma: '#ed5565', empeora: '#e67e22', recuperado: '#1ab394' };
-        const iconos  = { inicial: '📋', nueva_alarma: '🔴', empeora: '📉', recuperado: '✅' };
-        const labels  = { inicial: 'INICIO', nueva_alarma: 'ALARMA', empeora: 'EMPEORA', recuperado: 'RECUPERADO' };
+        const iconos = { inicial: '📋', nueva_alarma: '🔴', empeora: '📉', recuperado: '✅' };
+        const labels = { inicial: 'INICIO', nueva_alarma: 'ALARMA', empeora: 'EMPEORA', recuperado: 'RECUPERADO' };
         contenedor.innerHTML = logEntradas.map(e => {
             let detalle = '';
             if (e.tipo === 'inicial' || e.tipo === 'nueva_alarma')
@@ -158,7 +158,7 @@
             if (e.tipo === 'recuperado')
                 detalle = `Estaba OFF:${e.datos.off} (${e.datos.pDown}%)`;
             const zona = e.datos.zona || '';
-            const op   = e.datos.op   || '';
+            const op = e.datos.op || '';
             return `
                 <div style="margin-bottom:7px;padding:7px 8px;border-left:4px solid ${colores[e.tipo]};background:rgba(255,255,255,0.04);border-radius:0 4px 4px 0;">
                     <div style="display:flex;justify-content:space-between;align-items:center;">
@@ -174,9 +174,14 @@
 
     // --- FAVICON ---
     let faviconEl = document.querySelector("link[rel~='icon']");
-    if (!faviconEl) { faviconEl = document.createElement('link'); faviconEl.rel = 'icon'; document.head.appendChild(faviconEl); }
+    if (!faviconEl) {
+        faviconEl = document.createElement('link');
+        faviconEl.rel = 'icon';
+        document.head.appendChild(faviconEl);
+    }
     const faviconCanvas = document.createElement('canvas');
-    faviconCanvas.width = 32; faviconCanvas.height = 32;
+    faviconCanvas.width = 32;
+    faviconCanvas.height = 32;
     const faviconCtx = faviconCanvas.getContext('2d');
 
     function actualizarPestana(oltName, totalCriticos, hayNuevos) {
@@ -213,8 +218,8 @@
             50%  { background-color: rgba(237,85,101,0.6); border-left:5px solid #fff; }
             100% { background-color: rgba(237,85,101,0.1); border-left:5px solid #ed5565; }
         }
-        .celda-acs-blink       { animation: pulseACS   0.8s infinite !important; }
-        .tarjeta-panel-blink   { animation: pulsePanel 1s   infinite ease-in-out !important; }
+        .celda-acs-blink { animation: pulseACS 0.8s infinite !important; }
+        .tarjeta-panel-blink { animation: pulsePanel 1s infinite ease-in-out !important; }
         .badge-nuevo {
             background:#fff !important; color:#ed5565 !important;
             font-size:10px !important; font-weight:900 !important;
@@ -230,7 +235,6 @@
         .ctrl:hover, .ctrl:focus { border-color:#ed5565; }
         input[type=number]::-webkit-inner-spin-button { opacity:1; }
 
-        /* FIX ANIMACION: max-height para apertura fluida del panel */
         #alert-content {
             max-height: 0;
             overflow: hidden;
@@ -239,7 +243,6 @@
         #alert-content.panel-abierto {
             max-height: 80vh;
         }
-
         #olt-alert-panel.modo-flotante {
             left: 50% !important;
             bottom: auto !important;
@@ -263,7 +266,6 @@
         if (document.getElementById('olt-alert-panel')) return;
         const panel = document.createElement('div');
         panel.id = 'olt-alert-panel';
-        // FIX ANIMACION: alert-content sin display:none, controlado por clase CSS
         panel.innerHTML = `
             <div id="panel-header" style="cursor:pointer;font-weight:bold;border-bottom:1px solid #ed5565;margin-bottom:10px;padding-bottom:5px;font-size:13px;color:#ed5565;display:flex;justify-content:space-between;align-items:center;">
                 <span id="panel-drag-handle" style="flex:1;display:flex;align-items:center;gap:6px;">
@@ -277,9 +279,8 @@
             <div id="alert-content">
                 <div style="display:flex;gap:4px;margin-bottom:10px;">
                     <button id="tab-alarmas" class="tab-btn tab-active">🚨 Alarmas</button>
-                    <button id="tab-log"     class="tab-btn tab-inactive">📋 Log</button>
+                    <button id="tab-log" class="tab-btn tab-inactive">📋 Log</button>
                 </div>
-
                 <div id="vista-alarmas">
                     <div style="background:rgba(255,255,255,0.05);padding:8px;margin-bottom:10px;border-radius:4px;display:flex;flex-direction:column;gap:5px;">
                         <span style="font-size:10px;color:#aaa;font-weight:bold;">TIPO DE ALARMA:</span>
@@ -313,7 +314,6 @@
                     </div>
                     <div id="alert-list" style="max-height:40vh;overflow-y:auto;scrollbar-width:thin;font-family:'Google Sans',monospace;"></div>
                 </div>
-
                 <div id="vista-log" style="display:none;">
                     <div style="display:flex;gap:4px;margin-bottom:8px;">
                         <button id="btn-exportar-log" style="flex:1;background:#333;border:1px solid #555;color:#aaa;font-size:10px;font-weight:bold;padding:5px 0;border-radius:4px;cursor:pointer;">⬇ .TXT</button>
@@ -327,27 +327,36 @@
         const tabStyle = document.createElement('style');
         tabStyle.innerHTML = `
             .tab-btn { flex:1; padding:4px 0; font-size:10px; font-weight:bold; border:none; border-radius:3px; cursor:pointer; }
-            .tab-active   { background:#ed5565; color:white; }
+            .tab-active { background:#ed5565; color:white; }
             .tab-inactive { background:#333; color:#aaa; }
         `;
         document.head.appendChild(tabStyle);
 
         Object.assign(panel.style, {
-            position:'fixed', bottom:'20px', left:'0px', width:'120px',
-            backgroundColor:'rgba(5,5,5,0.98)', color:'white', padding:'12px',
-            borderRadius:'0 8px 8px 0', boxShadow:'5px 0 20px rgba(0,0,0,1)',
-            zIndex:'10000', border:'1px solid #444', borderLeft:'none', transition:'width 0.25s ease'
+            position: 'fixed',
+            bottom: '20px',
+            left: '0px',
+            width: '120px',
+            backgroundColor: 'rgba(5,5,5,0.98)',
+            color: 'white',
+            padding: '12px',
+            borderRadius: '0 8px 8px 0',
+            boxShadow: '5px 0 20px rgba(0,0,0,1)',
+            zIndex: '10000',
+            border: '1px solid #444',
+            borderLeft: 'none',
+            transition: 'width 0.25s ease'
         });
         document.body.appendChild(panel);
 
         document.getElementById('umbral-valor').value = umbralValor;
-        document.getElementById('umbral-tipo').value  = umbralTipo;
+        document.getElementById('umbral-tipo').value = umbralTipo;
 
         const actualizarConfiguracion = () => {
             umbralValor = parseFloat(document.getElementById('umbral-valor').value) || 0;
-            umbralTipo  = document.getElementById('umbral-tipo').value;
+            umbralTipo = document.getElementById('umbral-tipo').value;
             localStorage.setItem('oltUmbralValor', umbralValor);
-            localStorage.setItem('oltUmbralTipo',  umbralTipo);
+            localStorage.setItem('oltUmbralTipo', umbralTipo);
             modoCargaInicial = true;
             registroNodos.clear();
         };
@@ -364,8 +373,6 @@
             if (hayActivas && !silenciado && !muteGlobal) sonidoAlerta.play().catch(() => {});
         });
 
-        // FIX-B+C: btn-test-play/stop gestionan enPrueba para proteger ciclo automático
-        // FIX-A: NO hay silenciado=false aquí; el test ignora mute (verificar carga de audio)
         document.getElementById('btn-test-play').onclick = () => {
             detenerSonido();
             enPrueba = true;
@@ -394,7 +401,7 @@
 
         function aplicarMuteEstado() {
             const statusEl = document.getElementById('mute-status');
-            const btnSil   = document.getElementById('btn-silenciar');
+            const btnSil = document.getElementById('btn-silenciar');
             if (!statusEl || !btnSil) return;
             if (muteGlobal) {
                 btnSil.style.background = '#7d3c98';
@@ -430,25 +437,41 @@
                 clicksRapidos = 0;
                 clearTimeout(timerMuteTemporal);
                 muteExpiraEn = null;
-                muteGlobal = true; silenciado = true;
+                muteGlobal = true;
+                silenciado = true;
                 localStorage.setItem('oltMuteGlobal', 'true');
-                enPrueba = false; detenerSonido(); aplicarMuteEstado(); return;
+                enPrueba = false;
+                detenerSonido();
+                aplicarMuteEstado();
+                return;
             }
             if (muteGlobal) {
-                clicksRapidos = 0; muteGlobal = false; silenciado = false; muteExpiraEn = null;
-                localStorage.setItem('oltMuteGlobal', 'false'); aplicarMuteEstado(); return;
+                clicksRapidos = 0;
+                muteGlobal = false;
+                silenciado = false;
+                muteExpiraEn = null;
+                localStorage.setItem('oltMuteGlobal', 'false');
+                aplicarMuteEstado();
+                return;
             }
             if (silenciado && muteExpiraEn) {
-                clearTimeout(timerMuteTemporal); timerMuteTemporal = null;
-                silenciado = false; muteExpiraEn = null; aplicarMuteEstado(); return;
+                clearTimeout(timerMuteTemporal);
+                timerMuteTemporal = null;
+                silenciado = false;
+                muteExpiraEn = null;
+                aplicarMuteEstado();
+                return;
             }
             const DURACION_MS = 60 * 60 * 1000;
             muteExpiraEn = Date.now() + DURACION_MS;
             silenciado = true;
-            enPrueba = false; detenerSonido();
+            enPrueba = false;
+            detenerSonido();
             clearTimeout(timerMuteTemporal);
             timerMuteTemporal = setTimeout(() => {
-                silenciado = false; muteExpiraEn = null; aplicarMuteEstado();
+                silenciado = false;
+                muteExpiraEn = null;
+                aplicarMuteEstado();
             }, DURACION_MS);
             aplicarMuteEstado();
         });
@@ -463,18 +486,17 @@
             document.getElementById('vista-alarmas').style.display = 'block';
             document.getElementById('vista-log').style.display = 'none';
             document.getElementById('tab-alarmas').className = 'tab-btn tab-active';
-            document.getElementById('tab-log').className     = 'tab-btn tab-inactive';
+            document.getElementById('tab-log').className = 'tab-btn tab-inactive';
         };
         document.getElementById('tab-log').onclick = () => {
             vistaActual = 'log';
             document.getElementById('vista-alarmas').style.display = 'none';
             document.getElementById('vista-log').style.display = 'block';
             document.getElementById('tab-alarmas').className = 'tab-btn tab-inactive';
-            document.getElementById('tab-log').className     = 'tab-btn tab-active';
+            document.getElementById('tab-log').className = 'tab-btn tab-active';
             renderizarLog();
         };
 
-        // FIX ANIMACION: toggle usa clase CSS en lugar de display:block/none
         document.getElementById('panel-header').onclick = function(e) {
             if (e.target.id === 'btn-flotante') return;
             if (modoFlotante) return;
@@ -502,30 +524,37 @@
             if (modoFlotante) {
                 panel.classList.add('modo-flotante');
                 panel.style.width = '640px';
-                panel.style.left  = '50%';
+                panel.style.left = '50%';
                 panel.style.bottom = 'auto';
-                panel.style.top   = '50%';
+                panel.style.top = '50%';
                 panel.style.borderLeft = '1px solid #555';
                 panel.style.borderRadius = '8px';
                 btn.title = 'Volver a anclado';
                 btn.style.opacity = '1';
                 document.getElementById('toggle-btn').style.display = 'none';
                 content.classList.add('panel-abierto');
-                // En modo flotante el contenido no debe estar restringido por max-height
                 content.style.maxHeight = 'none';
             } else {
                 panel.classList.remove('modo-flotante');
                 panel.style.cssText = '';
                 Object.assign(panel.style, {
-                    position:'fixed', bottom:'20px', left:'0px', width:'300px',
-                    backgroundColor:'rgba(5,5,5,0.98)', color:'white', padding:'12px',
-                    borderRadius:'0 8px 8px 0', boxShadow:'5px 0 20px rgba(0,0,0,1)',
-                    zIndex:'10000', border:'1px solid #444', borderLeft:'none', transition:'width 0.25s ease'
+                    position: 'fixed',
+                    bottom: '20px',
+                    left: '0px',
+                    width: '300px',
+                    backgroundColor: 'rgba(5,5,5,0.98)',
+                    color: 'white',
+                    padding: '12px',
+                    borderRadius: '0 8px 8px 0',
+                    boxShadow: '5px 0 20px rgba(0,0,0,1)',
+                    zIndex: '10000',
+                    border: '1px solid #444',
+                    borderLeft: 'none',
+                    transition: 'width 0.25s ease'
                 });
                 document.getElementById('toggle-btn').style.display = 'inline';
                 document.getElementById('toggle-btn').innerText = '−';
                 content.classList.add('panel-abierto');
-                // Restaurar max-height controlado por CSS
                 content.style.maxHeight = '';
                 btn.title = 'Modo flotante';
                 btn.style.opacity = '0.6';
@@ -571,15 +600,15 @@
                 if (!matchPuerto) continue;
                 const portStr = matchPuerto[1].padStart(2, '0');
 
-                const on  = parseInt(celdaPort.querySelector('.label-green')?.innerText)  || 0;
+                const on = parseInt(celdaPort.querySelector('.label-green')?.innerText) || 0;
                 const off = parseInt(celdaPort.querySelector('.label-danger')?.innerText) || 0;
                 const total = on + off;
                 if (total === 0) continue;
 
                 const pDown = ((off / total) * 100).toFixed(1);
-                const pUp   = ((on  / total) * 100).toFixed(1);
+                const pUp = ((on / total) * 100).toFixed(1);
                 const idNodo = `${oltName}${slotStr}${portStr}A`;
-                const superaUmbral = umbralTipo === 'porcentaje' ? pDown >= umbralValor : off >= umbralValor;
+                const superaUmbral = umbralTipo === 'porcentaje' ? parseFloat(pDown) >= umbralValor : off >= umbralValor;
 
                 const etiquetas = celdaPort.querySelectorAll('.gpon-util .label');
                 let labelPrincipal = null;
@@ -609,7 +638,6 @@
                             registrarLog('inicial', idNodo, datosNodo);
                         } else {
                             hayNovedadesParaAlarma = true;
-                            // FIX-A: eliminado silenciado=false aquí
                             registrarLog('nueva_alarma', idNodo, datosNodo);
                         }
                     } else {
@@ -646,13 +674,9 @@
             }
         });
 
-        // FIX-A: solo reproducir si no silenciado/muteGlobal (silenciado ya no se fuerza a false)
         if (hayNovedadesParaAlarma && !silenciado && !muteGlobal) sonidoAlerta.play().catch(() => {});
-
-        // FIX-B+D: detener sonido cuando no quedan críticos (y no estamos en prueba)
         if (!enPrueba && criticosActuales.length === 0) detenerSonido();
 
-        // Recuperados
         const idsActivos = new Set(criticosActuales.map(c => c.id));
         for (let [id, data] of registroNodos.entries()) {
             if (!idsActivos.has(id)) {
@@ -663,7 +687,6 @@
 
         modoCargaInicial = false;
 
-        // Poblar selector operadoras
         const selectOp = document.getElementById('filtro-op');
         if (selectOp) {
             const opsEnOlt = [...new Set(criticosActuales.map(c => c.op).filter(Boolean))].sort();
@@ -673,7 +696,8 @@
                 while (selectOp.options.length > 1) selectOp.remove(1);
                 opsEnOlt.forEach(op => {
                     const opt = document.createElement('option');
-                    opt.value = op; opt.textContent = op;
+                    opt.value = op;
+                    opt.textContent = op;
                     selectOp.appendChild(opt);
                 });
                 selectOp.value = opsEnOlt.includes(selAnterior) ? selAnterior : 'TODOS';
@@ -683,7 +707,7 @@
 
         const criticosFiltrados = filtroOp === 'TODOS' ? criticosActuales : criticosActuales.filter(c => c.op === filtroOp);
         const badgeContador = document.getElementById('alert-count');
-        const btnMarcar     = document.getElementById('btn-marcar-todos');
+        const btnMarcar = document.getElementById('btn-marcar-todos');
         const hayAlgoSinLeer = criticosActuales.some(c => c.esNuevoParaPanel);
 
         badgeContador.innerText = criticosActuales.length;
@@ -714,9 +738,8 @@
         actualizarPestana(oltActual, criticosActuales.length, hayAlgoSinLeer);
     }
 
-    // FIX-D: revokeObjectURL para evitar leak de memoria del Worker
     const workerBlobUrl = URL.createObjectURL(
-        new Blob([`setInterval(()=>postMessage('tick'),2500)`], { type:'application/javascript' })
+        new Blob([`setInterval(()=>postMessage('tick'),2500)`], { type: 'application/javascript' })
     );
     const worker = new Worker(workerBlobUrl);
     URL.revokeObjectURL(workerBlobUrl);
