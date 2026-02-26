@@ -6,8 +6,8 @@
 // @inject-into  content
 // @run-at       document-end
 // @author       Ing. Adrian Leon
-// @updateURL    https://raw.githubusercontent.com/TakRiuto/ACSScripts/main/Monitor.user.js
-// @downloadURL  https://raw.githubusercontent.com/TakRiuto/ACSScripts/main/Monitor.user.js
+// @updateURL    https://raw.githubusercontent.com/TakRiuto/ACSScripts/release/Monitor.user.js
+// @downloadURL  https://raw.githubusercontent.com/TakRiuto/ACSScripts/release/Monitor.user.js
 // @grant        GM_fetch
 // @connect      raw.githubusercontent.com
 // @icon         https://avatars.githubusercontent.com/u/20828447?v=4
@@ -21,7 +21,7 @@
     let DB_NODOS = {};
     try {
         DB_NODOS = await fetch(
-            'https://raw.githubusercontent.com/TakRiuto/ACSScripts/refs/heads/main/nodos.json'
+            'https://raw.githubusercontent.com/TakRiuto/ACSScripts/refs/heads/release/nodos.json'
         ).then(r => {
             if (!r.ok) throw new Error(`HTTP ${r.status}`);
             return r.json();

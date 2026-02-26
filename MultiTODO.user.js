@@ -5,8 +5,8 @@
 // @grant        none
 // @version      2.3
 // @author       Ing. Adrian Leon
-// @updateURL    https://raw.githubusercontent.com/TakRiuto/ACSScripts/main/MultiTODO.user.js
-// @downloadURL  https://raw.githubusercontent.com/TakRiuto/ACSScripts/main/MultiTODO.user.js
+// @updateURL    https://raw.githubusercontent.com/TakRiuto/ACSScripts/release/MultiTODO.user.js
+// @downloadURL  https://raw.githubusercontent.com/TakRiuto/ACSScripts/release/MultiTODO.user.js
 // @icon         https://avatars.githubusercontent.com/u/20828447?v=4
 // ==/UserScript==
 
