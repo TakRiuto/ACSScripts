@@ -2,7 +2,7 @@
 // @name         OLT Monitor Maestro
 // @namespace    Violentmonkey Scripts
 // @match        *://190.153.58.82/monitoring/olt/*
-// @version      14
+// @version      14.1
 // @inject-into  content
 // @run-at       document-end
 // @author       Ing. Adrian Leon
@@ -37,6 +37,7 @@
     let umbralValor = parseFloat(localStorage.getItem('oltUmbralValor')) || 30;
     let umbralTipo = localStorage.getItem('oltUmbralTipo') || 'porcentaje';
     let filtroOp = 'TODOS';
+    let escala = parseFloat(localStorage.getItem('oltPanelEscala')) || 1;
 
     const registroNodos = new Map();
 
@@ -523,12 +524,15 @@
 
             if (modoFlotante) {
                 panel.classList.add('modo-flotante');
-                panel.style.width = '640px';
+                panel.style.width = '960px';
                 panel.style.left = '50%';
+                panel.style.fontSize = '15px';
+                panel.style.padding = '18px';
                 panel.style.bottom = 'auto';
                 panel.style.top = '50%';
                 panel.style.borderLeft = '1px solid #555';
                 panel.style.borderRadius = '8px';
+                panel.style.zoom = '1.2';
                 btn.title = 'Volver a anclado';
                 btn.style.opacity = '1';
                 document.getElementById('toggle-btn').style.display = 'none';
@@ -537,6 +541,7 @@
             } else {
                 panel.classList.remove('modo-flotante');
                 panel.style.cssText = '';
+                panel.style.zoom = '';
                 Object.assign(panel.style, {
                     position: 'fixed',
                     bottom: '20px',
@@ -544,6 +549,7 @@
                     width: '300px',
                     backgroundColor: 'rgba(5,5,5,0.98)',
                     color: 'white',
+                    fontSize: '',
                     padding: '12px',
                     borderRadius: '0 8px 8px 0',
                     boxShadow: '5px 0 20px rgba(0,0,0,1)',
@@ -572,14 +578,13 @@
         if (!window.location.href.includes('/monitoring/olt/')) return;
         crearPanel();
 
-        const oltName = document.querySelector('.olt-monitoring-details-olt-title')?.innerText.trim() || "OLT";
-        if (oltName !== oltActual) {
-            oltActual = oltName;
-            modoCargaInicial = true;
-            logEntradas = [];
-            registroNodos.clear();
-        }
-
+    const oltName = document.querySelector('.olt-monitoring-details-olt-title')?.innerText.trim() || "";
+    if (oltName && oltName !== oltActual) {
+        oltActual = oltName;
+        modoCargaInicial = true;
+        logEntradas = [];
+        registroNodos.clear();
+    }
         const filas = document.querySelectorAll('tr');
         const criticosActuales = [];
         const ahora = Date.now();
