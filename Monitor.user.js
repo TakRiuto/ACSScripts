@@ -2,7 +2,7 @@
 // @name         OLT Monitor Maestro
 // @namespace    Violentmonkey Scripts
 // @match        *://190.153.58.82/monitoring/olt/*
-// @version      13.6
+// @version      13.7
 // @inject-into  content
 // @run-at       document-end
 // @author       Ing. Adrian Leon
@@ -15,8 +15,8 @@
 
 (async function() {
     'use strict';
-    // Guard: no ejecutar dentro de iframes del Dashboard
     if (window.self !== window.top) return;
+
     // --- CARGA DB ---
     let DB_NODOS = {};
     try {
@@ -49,17 +49,16 @@
         alarmhard:    new Audio('https://www.myinstants.com/media/sounds/chicken-on-tree-screaming.mp3'),
         chevette99:   new Audio('http://soundbible.com/grab.php?id=2214&type=mp3')
     };
-    // Loop nativo + precarga en todos
     Object.values(AUDIOS).forEach(a => { a.preload = 'auto'; a.loop = true; });
 
-    // Persistir selección de alarma
     const alarmaGuardada = localStorage.getItem('oltAlarmaSeleccionada') || 'dosimeter';
     let sonidoAlerta = AUDIOS[alarmaGuardada] || AUDIOS.alarm;
 
     let silenciado = false;
     let muteGlobal = localStorage.getItem('oltMuteGlobal') === 'true';
+    // FIX-B+C: variable para proteger el sonido durante prueba manual
+    let enPrueba = false;
 
-    // Desbloquear todos los audios en el primer click del usuario
     let audioAutorizado = false;
     document.addEventListener('click', () => {
         if (!audioAutorizado) {
@@ -103,55 +102,36 @@
     }
 
     function exportarCSV() {
-        // Etiquetas de estado legibles
         const ESTATUS = {
             inicial:     'INICIO',
             nueva_alarma:'ALARMA',
             empeora:     'EMPEORA',
             recuperado:  'RECUPERADO'
         };
-
         const encabezado = ['Fecha','Hora','OLT','Nodo','Ubicacion','Operadora','Estatus','Clientes Caidos','Clientes Caidos Antes','Clientes Totales','Porcentaje Caida'];
-
         const filas = logEntradas.map(e => {
-            // Separar fecha y hora del timestamp "DD/MM/YYYY HH:MM:SS"
             const [fecha, hora] = e.ts.split(' ');
-
             const zona = e.datos.zona || '';
             const op   = e.datos.op   || '';
             const estatus = ESTATUS[e.tipo] || e.tipo;
-
-            let caidos      = '';
-            let caidosAntes = '';
-            let totales     = '';
-            let porcCaida   = '';
-
+            let caidos = '', caidosAntes = '', totales = '', porcCaida = '';
             if (e.tipo === 'inicial' || e.tipo === 'nueva_alarma') {
-                caidos    = e.datos.off   ?? '';
-                totales   = e.datos.total ?? '';
+                caidos = e.datos.off ?? ''; totales = e.datos.total ?? '';
                 porcCaida = e.datos.pDown != null ? `${e.datos.pDown}%` : '';
             } else if (e.tipo === 'empeora') {
-                caidos      = e.datos.off      ?? '';
-                caidosAntes = e.datos.offAntes  ?? '';
-                totales     = e.datos.total     ?? '';
-                porcCaida   = e.datos.pDown != null ? `${e.datos.pDown}%` : '';
+                caidos = e.datos.off ?? ''; caidosAntes = e.datos.offAntes ?? '';
+                totales = e.datos.total ?? '';
+                porcCaida = e.datos.pDown != null ? `${e.datos.pDown}%` : '';
             } else if (e.tipo === 'recuperado') {
-                caidos    = e.datos.off   ?? '';
+                caidos = e.datos.off ?? '';
                 porcCaida = e.datos.pDown != null ? `${e.datos.pDown}%` : '';
             }
-
-            // Escapar campos que puedan contener comas
             const esc = v => `"${String(v).replace(/"/g, '""')}"`;
-
-            return [
-                esc(fecha), esc(hora), esc(oltActual), esc(e.nodo),
-                esc(zona), esc(op), esc(estatus),
-                esc(caidos), esc(caidosAntes), esc(totales), esc(porcCaida)
-            ].join(',');
+            return [esc(fecha), esc(hora), esc(oltActual), esc(e.nodo),
+                    esc(zona), esc(op), esc(estatus),
+                    esc(caidos), esc(caidosAntes), esc(totales), esc(porcCaida)].join(',');
         });
-
         const csv = [encabezado.join(','), ...filas].join('\n');
-        // BOM UTF-8 para que Excel lo abra correctamente con tildes
         const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
         const a = document.createElement('a');
         a.href = URL.createObjectURL(blob);
@@ -249,6 +229,17 @@
         }
         .ctrl:hover, .ctrl:focus { border-color:#ed5565; }
         input[type=number]::-webkit-inner-spin-button { opacity:1; }
+
+        /* FIX ANIMACION: max-height para apertura fluida del panel */
+        #alert-content {
+            max-height: 0;
+            overflow: hidden;
+            transition: max-height 0.25s ease;
+        }
+        #alert-content.panel-abierto {
+            max-height: 80vh;
+        }
+
         #olt-alert-panel.modo-flotante {
             left: 50% !important;
             bottom: auto !important;
@@ -272,27 +263,25 @@
         if (document.getElementById('olt-alert-panel')) return;
         const panel = document.createElement('div');
         panel.id = 'olt-alert-panel';
+        // FIX ANIMACION: alert-content sin display:none, controlado por clase CSS
         panel.innerHTML = `
             <div id="panel-header" style="cursor:pointer;font-weight:bold;border-bottom:1px solid #ed5565;margin-bottom:10px;padding-bottom:5px;font-size:13px;color:#ed5565;display:flex;justify-content:space-between;align-items:center;">
                 <span id="panel-drag-handle" style="flex:1;display:flex;align-items:center;gap:6px;">
                     🚨 <span id="alert-count" style="background:#ed5565;color:white;border-radius:10px;padding:0 8px;font-size:11px;">0</span>
                 </span>
                 <div style="display:flex;align-items:center;gap:5px;">
-                    <span id="btn-flotante" title="Modo flotante" style="font-size:13px;cursor:pointer;opacity:0.6;user-select:none;" onclick="event.stopPropagation()">⧉</span>
+                    <span id="btn-flotante" title="Modo flotante" style="font-size:13px;cursor:pointer;opacity:0.2;user-select:none;pointer-events:none;" onclick="event.stopPropagation()">⧉</span>
                     <span id="toggle-btn" style="font-size:16px;">+</span>
                 </div>
             </div>
-            <div id="alert-content" style="display:none;">
-                <!-- TABS -->
+            <div id="alert-content">
                 <div style="display:flex;gap:4px;margin-bottom:10px;">
                     <button id="tab-alarmas" class="tab-btn tab-active">🚨 Alarmas</button>
                     <button id="tab-log"     class="tab-btn tab-inactive">📋 Log</button>
                 </div>
 
-                <!-- VISTA ALARMAS -->
                 <div id="vista-alarmas">
                     <div style="background:rgba(255,255,255,0.05);padding:8px;margin-bottom:10px;border-radius:4px;display:flex;flex-direction:column;gap:5px;">
-
                         <span style="font-size:10px;color:#aaa;font-weight:bold;">TIPO DE ALARMA:</span>
                         <div style="display:flex;gap:4px;align-items:center;">
                             <select id="selector-alarma" class="ctrl" style="flex:1;">
@@ -305,7 +294,6 @@
                             <button id="btn-test-play" class="ctrl" style="width:32px;color:#1ab394;" title="Probar sonido">▶</button>
                             <button id="btn-test-stop" class="ctrl" style="width:32px;color:#ed5565;" title="Detener prueba">■</button>
                         </div>
-
                         <div style="display:flex;gap:5px;">
                             <select id="umbral-tipo" class="ctrl" style="flex:1;">
                                 <option value="porcentaje">Porcentaje (%)</option>
@@ -313,12 +301,10 @@
                             </select>
                             <input type="number" id="umbral-valor" class="ctrl" style="width:55px;text-align:center;" min="1" max="999">
                         </div>
-
                         <span style="font-size:10px;color:#aaa;font-weight:bold;">OPERADORA:</span>
                         <select id="filtro-op" class="ctrl" style="width:100%;">
                             <option value="TODOS">— Todas —</option>
                         </select>
-
                         <div style="display:flex;align-items:center;justify-content:space-between;gap:4px;">
                             <button id="btn-marcar-todos" style="display:none;flex:1;background:#1ab394;border:none;color:white;font-size:11px;font-weight:bold;padding:5px 0;border-radius:4px;cursor:pointer;">✔ Marcar vistos</button>
                             <button id="btn-silenciar" style="flex:1;background:#333;border:1px solid #555;color:#ccc;font-size:11px;font-weight:bold;padding:5px 0;border-radius:4px;cursor:pointer;" title="Click para silenciar 60min | 5 clicks = permanente">🔇 Silenciar</button>
@@ -328,7 +314,6 @@
                     <div id="alert-list" style="max-height:40vh;overflow-y:auto;scrollbar-width:thin;font-family:'Google Sans',monospace;"></div>
                 </div>
 
-                <!-- VISTA LOG -->
                 <div id="vista-log" style="display:none;">
                     <div style="display:flex;gap:4px;margin-bottom:8px;">
                         <button id="btn-exportar-log" style="flex:1;background:#333;border:1px solid #555;color:#aaa;font-size:10px;font-weight:bold;padding:5px 0;border-radius:4px;cursor:pointer;">⬇ .TXT</button>
@@ -339,7 +324,6 @@
             </div>
         `;
 
-        // Agregar estilos de tabs via CSS para no repetir inline
         const tabStyle = document.createElement('style');
         tabStyle.innerHTML = `
             .tab-btn { flex:1; padding:4px 0; font-size:10px; font-weight:bold; border:none; border-radius:3px; cursor:pointer; }
@@ -352,15 +336,13 @@
             position:'fixed', bottom:'20px', left:'0px', width:'120px',
             backgroundColor:'rgba(5,5,5,0.98)', color:'white', padding:'12px',
             borderRadius:'0 8px 8px 0', boxShadow:'5px 0 20px rgba(0,0,0,1)',
-            zIndex:'10000', border:'1px solid #444', borderLeft:'none', transition:'width 0.2s ease'
+            zIndex:'10000', border:'1px solid #444', borderLeft:'none', transition:'width 0.25s ease'
         });
         document.body.appendChild(panel);
 
-        // --- Valores iniciales ---
         document.getElementById('umbral-valor').value = umbralValor;
         document.getElementById('umbral-tipo').value  = umbralTipo;
 
-        // --- Config umbral ---
         const actualizarConfiguracion = () => {
             umbralValor = parseFloat(document.getElementById('umbral-valor').value) || 0;
             umbralTipo  = document.getElementById('umbral-tipo').value;
@@ -372,27 +354,19 @@
         document.getElementById('umbral-valor').addEventListener('change', actualizarConfiguracion);
         document.getElementById('umbral-tipo').addEventListener('change', actualizarConfiguracion);
 
-        // --- Selector de alarma ---
-        const MAPA_ALARMA = { dosimeter:'dosimeter', alarm:'alarm', alarmabrazil:'alarmabrazil', alarmhard:'alarmhard', chevette99:'chevette99' };
-        // Restaurar selección guardada
         const selectAlarma = document.getElementById('selector-alarma');
-        selectAlarma.value = alarmaGuardada in MAPA_ALARMA ? alarmaGuardada : 'alarm';
-
+        selectAlarma.value = alarmaGuardada in AUDIOS ? alarmaGuardada : 'dosimeter';
         selectAlarma.addEventListener('change', function() {
-            const clave = MAPA_ALARMA[this.value] || 'alarm';
-            sonidoAlerta.pause();
-            sonidoAlerta.currentTime = 0;
-            sonidoAlerta = AUDIOS[clave];
+            detenerSonido();
+            sonidoAlerta = AUDIOS[this.value] || AUDIOS.alarm;
             localStorage.setItem('oltAlarmaSeleccionada', this.value);
-            // Si hay alarmas activas sin leer, arrancar el nuevo audio inmediatamente
             const hayActivas = [...registroNodos.values()].some(d => !d.reconocido);
             if (hayActivas && !silenciado && !muteGlobal) sonidoAlerta.play().catch(() => {});
         });
 
-        // --- Botones tester ▶ ■ ---
-        let enPrueba = false;
+        // FIX-B+C: btn-test-play/stop gestionan enPrueba para proteger ciclo automático
+        // FIX-A: NO hay silenciado=false aquí; el test ignora mute (verificar carga de audio)
         document.getElementById('btn-test-play').onclick = () => {
-            if (silenciado || muteGlobal) return; // respetar silencio
             detenerSonido();
             enPrueba = true;
             sonidoAlerta.play().catch(() => {});
@@ -404,28 +378,25 @@
             document.getElementById('btn-test-play').textContent = '▶';
         };
 
-        // --- Filtro operadora ---
         document.getElementById('filtro-op').addEventListener('change', function() { filtroOp = this.value; });
 
-        // --- Marcar vistos ---
         document.getElementById('btn-marcar-todos').onclick = () => {
             for (let data of registroNodos.values()) data.reconocido = true;
+            enPrueba = false;
             detenerSonido();
         };
 
-        // --- Botón silenciar con timer y modo secreto ---
+        // --- Botón silenciar ---
         let clicksRapidos = 0;
         let timerClickReset = null;
         let timerMuteTemporal = null;
-        let muteExpiraEn = null; // timestamp absoluto
+        let muteExpiraEn = null;
 
         function aplicarMuteEstado() {
             const statusEl = document.getElementById('mute-status');
             const btnSil   = document.getElementById('btn-silenciar');
             if (!statusEl || !btnSil) return;
-
             if (muteGlobal) {
-                // Permanente
                 btnSil.style.background = '#7d3c98';
                 btnSil.style.borderColor = '#9b59b6';
                 btnSil.style.color = 'white';
@@ -433,7 +404,6 @@
                 statusEl.style.color = '#9b59b6';
                 statusEl.textContent = '🔒 Silencio permanente activo';
             } else if (silenciado && muteExpiraEn) {
-                // Temporal: mostrar cuenta regresiva
                 btnSil.style.background = '#784212';
                 btnSil.style.borderColor = '#e67e22';
                 btnSil.style.color = 'white';
@@ -442,7 +412,6 @@
                 const minRestantes = Math.ceil((muteExpiraEn - Date.now()) / 60000);
                 statusEl.textContent = `⏱ Silenciado ${minRestantes}min restantes`;
             } else {
-                // Activo / sin silencio
                 btnSil.style.background = '#333';
                 btnSil.style.borderColor = '#555';
                 btnSil.style.color = '#ccc';
@@ -450,71 +419,45 @@
             }
         }
 
-        // Actualizar countdown cada minuto
         setInterval(aplicarMuteEstado, 30000);
 
         document.getElementById('btn-silenciar').addEventListener('click', () => {
-            // Contar clicks rápidos para modo secreto
             clicksRapidos++;
             clearTimeout(timerClickReset);
             timerClickReset = setTimeout(() => { clicksRapidos = 0; }, 1000);
 
             if (clicksRapidos >= 5) {
-                // MODO SECRETO — silencio permanente
                 clicksRapidos = 0;
                 clearTimeout(timerMuteTemporal);
                 muteExpiraEn = null;
-                muteGlobal = true;
-                silenciado = true;
+                muteGlobal = true; silenciado = true;
                 localStorage.setItem('oltMuteGlobal', 'true');
-                detenerSonido();
-                aplicarMuteEstado();
-                return;
+                enPrueba = false; detenerSonido(); aplicarMuteEstado(); return;
             }
-
             if (muteGlobal) {
-                // Desactivar permanente
-                clicksRapidos = 0;
-                muteGlobal = false;
-                silenciado = false;
-                muteExpiraEn = null;
-                localStorage.setItem('oltMuteGlobal', 'false');
-                aplicarMuteEstado();
-                return;
+                clicksRapidos = 0; muteGlobal = false; silenciado = false; muteExpiraEn = null;
+                localStorage.setItem('oltMuteGlobal', 'false'); aplicarMuteEstado(); return;
             }
-
             if (silenciado && muteExpiraEn) {
-                // Desactivar temporal
-                clearTimeout(timerMuteTemporal);
-                timerMuteTemporal = null;
-                silenciado = false;
-                muteExpiraEn = null;
-                aplicarMuteEstado();
-                return;
+                clearTimeout(timerMuteTemporal); timerMuteTemporal = null;
+                silenciado = false; muteExpiraEn = null; aplicarMuteEstado(); return;
             }
-
-            // Activar silencio temporal 60min
             const DURACION_MS = 60 * 60 * 1000;
             muteExpiraEn = Date.now() + DURACION_MS;
             silenciado = true;
-            detenerSonido();
+            enPrueba = false; detenerSonido();
             clearTimeout(timerMuteTemporal);
             timerMuteTemporal = setTimeout(() => {
-                silenciado = false;
-                muteExpiraEn = null;
-                aplicarMuteEstado();
+                silenciado = false; muteExpiraEn = null; aplicarMuteEstado();
             }, DURACION_MS);
             aplicarMuteEstado();
         });
 
-        // Restaurar mute permanente si venía guardado
         if (muteGlobal) aplicarMuteEstado();
 
-        // --- Exportar log ---
         document.getElementById('btn-exportar-log').onclick = exportarLog;
         document.getElementById('btn-exportar-csv').onclick = exportarCSV;
 
-        // --- Tabs ---
         document.getElementById('tab-alarmas').onclick = () => {
             vistaActual = 'alarmas';
             document.getElementById('vista-alarmas').style.display = 'block';
@@ -531,32 +474,27 @@
             renderizarLog();
         };
 
-        // --- Toggle panel ---
+        // FIX ANIMACION: toggle usa clase CSS en lugar de display:block/none
         document.getElementById('panel-header').onclick = function(e) {
             if (e.target.id === 'btn-flotante') return;
-            // En modo flotante no permitir minimizar
             if (modoFlotante) return;
             const content = document.getElementById('alert-content');
-            const abriendo = content.style.display === 'none';
-            content.style.display = abriendo ? 'block' : 'none';
+            const abriendo = !content.classList.contains('panel-abierto');
+            content.classList.toggle('panel-abierto', abriendo);
             panel.style.width = abriendo ? '300px' : '120px';
             document.getElementById('toggle-btn').innerText = abriendo ? '−' : '+';
             panelAbiertoAt = abriendo ? Date.now() : 0;
 
-            // Habilitar/deshabilitar botón flotante según estado del panel
             const btnFlotante = document.getElementById('btn-flotante');
             btnFlotante.style.opacity = abriendo ? '0.6' : '0.2';
             btnFlotante.style.pointerEvents = abriendo ? 'auto' : 'none';
         };
 
-        // --- Modo flotante ---
         let modoFlotante = false;
-
         document.getElementById('btn-flotante').addEventListener('click', (e) => {
             e.stopPropagation();
-            // Solo funciona si el panel está abierto
             const content = document.getElementById('alert-content');
-            if (content.style.display === 'none' && !modoFlotante) return;
+            if (!content.classList.contains('panel-abierto') && !modoFlotante) return;
 
             modoFlotante = !modoFlotante;
             const btn = document.getElementById('btn-flotante');
@@ -571,9 +509,10 @@
                 panel.style.borderRadius = '8px';
                 btn.title = 'Volver a anclado';
                 btn.style.opacity = '1';
-                // Ocultar toggle −/+ en modo flotante para que no confunda
                 document.getElementById('toggle-btn').style.display = 'none';
-                document.getElementById('alert-content').style.display = 'block';
+                content.classList.add('panel-abierto');
+                // En modo flotante el contenido no debe estar restringido por max-height
+                content.style.maxHeight = 'none';
             } else {
                 panel.classList.remove('modo-flotante');
                 panel.style.cssText = '';
@@ -581,11 +520,13 @@
                     position:'fixed', bottom:'20px', left:'0px', width:'300px',
                     backgroundColor:'rgba(5,5,5,0.98)', color:'white', padding:'12px',
                     borderRadius:'0 8px 8px 0', boxShadow:'5px 0 20px rgba(0,0,0,1)',
-                    zIndex:'10000', border:'1px solid #444', borderLeft:'none', transition:'width 0.2s ease'
+                    zIndex:'10000', border:'1px solid #444', borderLeft:'none', transition:'width 0.25s ease'
                 });
                 document.getElementById('toggle-btn').style.display = 'inline';
                 document.getElementById('toggle-btn').innerText = '−';
-                document.getElementById('alert-content').style.display = 'block';
+                content.classList.add('panel-abierto');
+                // Restaurar max-height controlado por CSS
+                content.style.maxHeight = '';
                 btn.title = 'Modo flotante';
                 btn.style.opacity = '0.6';
             }
@@ -645,7 +586,6 @@
                 if (etiquetas.length > 0) {
                     labelPrincipal = etiquetas[0];
                     labelPrincipal.innerHTML = `<div style="line-height:1.1;"><b style="font-size:11px;">${pDown}% DN</b><br><span style="font-size:9px;">${pUp}% UP</span></div>`;
-                    // Ocultar etiquetas intermedias pero preservar label-success (botón de gráfica)
                     for (let j = 1; j < etiquetas.length; j++) {
                         if (!etiquetas[j].classList.contains('label-success')) {
                             etiquetas[j].style.display = 'none';
@@ -669,7 +609,7 @@
                             registrarLog('inicial', idNodo, datosNodo);
                         } else {
                             hayNovedadesParaAlarma = true;
-                            silenciado = false;
+                            // FIX-A: eliminado silenciado=false aquí
                             registrarLog('nueva_alarma', idNodo, datosNodo);
                         }
                     } else {
@@ -706,7 +646,11 @@
             }
         });
 
+        // FIX-A: solo reproducir si no silenciado/muteGlobal (silenciado ya no se fuerza a false)
         if (hayNovedadesParaAlarma && !silenciado && !muteGlobal) sonidoAlerta.play().catch(() => {});
+
+        // FIX-B+D: detener sonido cuando no quedan críticos (y no estamos en prueba)
+        if (!enPrueba && criticosActuales.length === 0) detenerSonido();
 
         // Recuperados
         const idsActivos = new Set(criticosActuales.map(c => c.id));
@@ -737,7 +681,6 @@
             }
         }
 
-        // Filtrar y renderizar
         const criticosFiltrados = filtroOp === 'TODOS' ? criticosActuales : criticosActuales.filter(c => c.op === filtroOp);
         const badgeContador = document.getElementById('alert-count');
         const btnMarcar     = document.getElementById('btn-marcar-todos');
@@ -771,9 +714,11 @@
         actualizarPestana(oltActual, criticosActuales.length, hayAlgoSinLeer);
     }
 
-    // Worker para ticks sin throttling de pestañas inactivas
-    const worker = new Worker(URL.createObjectURL(
+    // FIX-D: revokeObjectURL para evitar leak de memoria del Worker
+    const workerBlobUrl = URL.createObjectURL(
         new Blob([`setInterval(()=>postMessage('tick'),2500)`], { type:'application/javascript' })
-    ));
+    );
+    const worker = new Worker(workerBlobUrl);
+    URL.revokeObjectURL(workerBlobUrl);
     worker.onmessage = procesarNodos;
 })();
