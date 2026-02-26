@@ -325,7 +325,7 @@
                         </div>
                         <div id="mute-status" style="display:none;font-size:10px;text-align:center;color:#e67e22;font-weight:bold;"></div>
                     </div>
-                    <div id="alert-list" style="max-height:40vh;overflow-y:auto;scrollbar-width:thin;font-family:'Consolas',monospace;"></div>
+                    <div id="alert-list" style="max-height:40vh;overflow-y:auto;scrollbar-width:thin;font-family:'Google Sans',monospace;"></div>
                 </div>
 
                 <!-- VISTA LOG -->
@@ -334,7 +334,7 @@
                         <button id="btn-exportar-log" style="flex:1;background:#333;border:1px solid #555;color:#aaa;font-size:10px;font-weight:bold;padding:5px 0;border-radius:4px;cursor:pointer;">⬇ .TXT</button>
                         <button id="btn-exportar-csv" style="flex:1;background:#1a3a4a;border:1px solid #1a7a9a;color:#5bc8e8;font-size:10px;font-weight:bold;padding:5px 0;border-radius:4px;cursor:pointer;">⬇ .CSV</button>
                     </div>
-                    <div id="log-list" style="max-height:45vh;overflow-y:auto;scrollbar-width:thin;font-family:'Consolas',monospace;"></div>
+                    <div id="log-list" style="max-height:45vh;overflow-y:auto;scrollbar-width:thin;font-family:'Google Sans',monospace;"></div>
                 </div>
             </div>
         `;
