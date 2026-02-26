@@ -2,7 +2,7 @@
 // @name         OLT Monitor Maestro
 // @namespace    Violentmonkey Scripts
 // @match        *://190.153.58.82/monitoring/olt/*
-// @version      14.1
+// @version      14.7
 // @inject-into  content
 // @run-at       document-end
 // @author       Ing. Adrian Leon
@@ -37,7 +37,10 @@
     let umbralValor = parseFloat(localStorage.getItem('oltUmbralValor')) || 30;
     let umbralTipo = localStorage.getItem('oltUmbralTipo') || 'porcentaje';
     let filtroOp = 'TODOS';
-    let escala = parseFloat(localStorage.getItem('oltPanelEscala')) || 1;
+    let logBusqueda = '';
+ 
+    let panelState = 'minimizado';
+    let lastNonFloatingState = 'minimizado';
 
     const registroNodos = new Map();
 
@@ -47,7 +50,7 @@
         alarm:        new Audio('https://www.myinstants.com/media/sounds/alarm.MP3'),
         alarmabrazil: new Audio('https://www.myinstants.com/media/sounds/brazil-alarm.mp3'),
         alarmhard:    new Audio('https://www.myinstants.com/media/sounds/chicken-on-tree-screaming.mp3'),
-        chevette99:   new Audio('http://soundbible.com/grab.php?id=2214&type=mp3')
+        chevette99:   new Audio('https://soundbible.com/grab.php?id=2214&type=mp3')
     };
     Object.values(AUDIOS).forEach(a => { a.preload = 'auto'; a.loop = true; });
 
@@ -150,7 +153,18 @@
         const colores = { inicial: '#555', nueva_alarma: '#ed5565', empeora: '#e67e22', recuperado: '#1ab394' };
         const iconos = { inicial: '📋', nueva_alarma: '🔴', empeora: '📉', recuperado: '✅' };
         const labels = { inicial: 'INICIO', nueva_alarma: 'ALARMA', empeora: 'EMPEORA', recuperado: 'RECUPERADO' };
-        contenedor.innerHTML = logEntradas.map(e => {
+        const entradasFiltradas = logBusqueda
+        ? logEntradas.filter(e =>
+            e.nodo.toLowerCase().includes(logBusqueda) ||
+            (e.datos.zona || '').toLowerCase().includes(logBusqueda)
+          )
+        : logEntradas;
+
+        if (!entradasFiltradas.length) {
+        contenedor.innerHTML = `<div style="color:#aaa;text-align:center;padding:20px;font-size:11px;">Sin resultados para "<b>${logBusqueda}</b>"</div>`;
+        return;
+        }
+        contenedor.innerHTML = entradasFiltradas.map(e => {
             let detalle = '';
             if (e.tipo === 'inicial' || e.tipo === 'nueva_alarma')
                 detalle = `Total:${e.datos.total} ON:${e.datos.on} OFF:${e.datos.off} <b>${e.datos.pDown}%↓</b>`;
@@ -256,8 +270,30 @@
             min-width: 320px;
             min-height: 200px;
         }
-        #olt-alert-panel.modo-flotante #panel-drag-handle {
-            cursor: move;
+        /* En modo flotante, el cursor del header no es move */
+        #olt-alert-panel.modo-flotante #panel-header {
+            cursor: pointer;
+        }
+        #olt-alert-panel:not(.modo-flotante) #panel-header {
+            cursor: pointer; /* ya era pointer, pero lo dejamos explícito */
+        }
+        #panel-drag-handle {
+            cursor: default !important; /* nunca se arrastra */
+        }
+        /* El botón flotante siempre visible (excepto móvil) */
+        #btn-flotante {
+            font-size: 13px;
+            cursor: pointer;
+            opacity: 0.6;
+            user-select: none;
+        }
+        #btn-flotante:hover {
+            opacity: 1;
+        }
+        @media (max-width: 768px) {
+            #btn-flotante {
+                display: none;
+            }
         }
     `;
     (document.head || document.documentElement).appendChild(style);
@@ -273,7 +309,7 @@
                     🚨 <span id="alert-count" style="background:#ed5565;color:white;border-radius:10px;padding:0 8px;font-size:11px;">0</span>
                 </span>
                 <div style="display:flex;align-items:center;gap:5px;">
-                    <span id="btn-flotante" title="Modo flotante" style="font-size:13px;cursor:pointer;opacity:0.2;user-select:none;pointer-events:none;" onclick="event.stopPropagation()">⧉</span>
+                    <span id="btn-flotante" title="Modo flotante" onclick="event.stopPropagation()">⧉</span>
                     <span id="toggle-btn" style="font-size:16px;">+</span>
                 </div>
             </div>
@@ -316,6 +352,7 @@
                     <div id="alert-list" style="max-height:40vh;overflow-y:auto;scrollbar-width:thin;font-family:'Google Sans',monospace;"></div>
                 </div>
                 <div id="vista-log" style="display:none;">
+                    <input type="text" id="log-busqueda" class="ctrl" style="width:100%;margin-bottom:8px;color:#aaa;" placeholder="🔍 Buscar nodo o urbanismo...">
                     <div style="display:flex;gap:4px;margin-bottom:8px;">
                         <button id="btn-exportar-log" style="flex:1;background:#333;border:1px solid #555;color:#aaa;font-size:10px;font-weight:bold;padding:5px 0;border-radius:4px;cursor:pointer;">⬇ .TXT</button>
                         <button id="btn-exportar-csv" style="flex:1;background:#1a3a4a;border:1px solid #1a7a9a;color:#5bc8e8;font-size:10px;font-weight:bold;padding:5px 0;border-radius:4px;cursor:pointer;">⬇ .CSV</button>
@@ -349,6 +386,47 @@
             transition: 'width 0.25s ease'
         });
         document.body.appendChild(panel);
+
+        function aplicarEstadoPanel(estado) {
+            const content = document.getElementById('alert-content');
+            const btnToggle = document.getElementById('toggle-btn');
+            const btnFlotante = document.getElementById('btn-flotante');
+            if (estado === 'flotante') {
+                panel.classList.add('modo-flotante');
+                panel.style.width = '960px';
+                panel.style.fontSize = '15px';
+                panel.style.padding = '18px';
+                content.classList.add('panel-abierto');
+                content.style.maxHeight = 'none';
+                btnToggle.style.display = 'none';
+                btnFlotante.style.opacity = '1';
+                btnFlotante.title = 'Salir de modo flotante';
+            } else if (estado === 'abierto') {
+                panel.classList.remove('modo-flotante');
+                panel.style.width = '300px';
+                panel.style.fontSize = '';
+                panel.style.padding = '12px';
+                content.classList.add('panel-abierto');
+                content.style.maxHeight = '';
+                btnToggle.style.display = 'inline';
+                btnToggle.innerText = '−';
+                btnFlotante.style.opacity = '0.6';
+                btnFlotante.title = 'Modo flotante';
+            } else { // minimizado
+                panel.classList.remove('modo-flotante');
+                panel.style.width = '120px';
+                panel.style.fontSize = '';
+                panel.style.padding = '12px';
+                content.classList.remove('panel-abierto');
+                content.style.maxHeight = '';
+                btnToggle.style.display = 'inline';
+                btnToggle.innerText = '+';
+                btnFlotante.style.opacity = '0.6';
+                btnFlotante.title = 'Modo flotante';
+            }
+        }
+
+        aplicarEstadoPanel('minimizado');
 
         document.getElementById('umbral-valor').value = umbralValor;
         document.getElementById('umbral-tipo').value = umbralTipo;
@@ -497,73 +575,74 @@
             document.getElementById('tab-log').className = 'tab-btn tab-active';
             renderizarLog();
         };
+        document.getElementById('log-busqueda').addEventListener('input', function() {
+            logBusqueda = this.value.trim().toLowerCase();
+            renderizarLog();
+        });
 
         document.getElementById('panel-header').onclick = function(e) {
             if (e.target.id === 'btn-flotante') return;
-            if (modoFlotante) return;
-            const content = document.getElementById('alert-content');
-            const abriendo = !content.classList.contains('panel-abierto');
-            content.classList.toggle('panel-abierto', abriendo);
-            panel.style.width = abriendo ? '300px' : '120px';
-            document.getElementById('toggle-btn').innerText = abriendo ? '−' : '+';
-            panelAbiertoAt = abriendo ? Date.now() : 0;
-
-            const btnFlotante = document.getElementById('btn-flotante');
-            btnFlotante.style.opacity = abriendo ? '0.6' : '0.2';
-            btnFlotante.style.pointerEvents = abriendo ? 'auto' : 'none';
+            if (panel.classList.contains('modo-flotante')) {
+                panel.classList.remove('modo-flotante');
+                panel.style.width = '120px';
+                panel.style.fontSize = '';
+                panel.style.padding = '12px';
+                const content = document.getElementById('alert-content');
+                content.classList.remove('panel-abierto');
+                content.style.maxHeight = '';
+                document.getElementById('toggle-btn').style.display = 'inline';
+                document.getElementById('toggle-btn').innerText = '+';
+                document.getElementById('btn-flotante').style.opacity = '0.6';
+                document.getElementById('btn-flotante').title = 'Modo flotante';
+                panelState = 'minimizado';
+                lastNonFloatingState = 'minimizado';
+            } else {
+                const content = document.getElementById('alert-content');
+                const abriendo = !content.classList.contains('panel-abierto');
+                content.classList.toggle('panel-abierto', abriendo);
+                panel.style.width = abriendo ? '300px' : '120px';
+                document.getElementById('toggle-btn').innerText = abriendo ? '−' : '+';
+                panelAbiertoAt = abriendo ? Date.now() : 0;
+                panelState = abriendo ? 'abierto' : 'minimizado';
+                lastNonFloatingState = panelState;
+            }
         };
 
-        let modoFlotante = false;
         document.getElementById('btn-flotante').addEventListener('click', (e) => {
             e.stopPropagation();
+            if (window.innerWidth <= 768) return;
             const content = document.getElementById('alert-content');
-            if (!content.classList.contains('panel-abierto') && !modoFlotante) return;
-
-            modoFlotante = !modoFlotante;
-            const btn = document.getElementById('btn-flotante');
-
-            if (modoFlotante) {
+            if (panel.classList.contains('modo-flotante')) {
+                panel.classList.remove('modo-flotante');
+                panel.style.width = lastNonFloatingState === 'abierto' ? '300px' : '120px';
+                panel.style.fontSize = '';
+                panel.style.padding = '12px';
+                if (lastNonFloatingState === 'abierto') {
+                    content.classList.add('panel-abierto');
+                    content.style.maxHeight = '';
+                    document.getElementById('toggle-btn').innerText = '−';
+                } else {
+                    content.classList.remove('panel-abierto');
+                    content.style.maxHeight = '';
+                    document.getElementById('toggle-btn').innerText = '+';
+                }
+                document.getElementById('toggle-btn').style.display = 'inline';
+                document.getElementById('btn-flotante').style.opacity = '0.6';
+                document.getElementById('btn-flotante').title = 'Modo flotante';
+                panelState = lastNonFloatingState;
+            } else {
+                lastNonFloatingState = panelState;
                 panel.classList.add('modo-flotante');
                 panel.style.width = '960px';
-                panel.style.left = '50%';
                 panel.style.fontSize = '15px';
                 panel.style.padding = '18px';
-                panel.style.bottom = 'auto';
-                panel.style.top = '50%';
-                panel.style.borderLeft = '1px solid #555';
-                panel.style.borderRadius = '8px';
-                panel.style.zoom = '1.2';
-                btn.title = 'Volver a anclado';
-                btn.style.opacity = '1';
-                document.getElementById('toggle-btn').style.display = 'none';
                 content.classList.add('panel-abierto');
                 content.style.maxHeight = 'none';
-            } else {
-                panel.classList.remove('modo-flotante');
-                panel.style.cssText = '';
-                panel.style.zoom = '';
-                Object.assign(panel.style, {
-                    position: 'fixed',
-                    bottom: '20px',
-                    left: '0px',
-                    width: '300px',
-                    backgroundColor: 'rgba(5,5,5,0.98)',
-                    color: 'white',
-                    fontSize: '',
-                    padding: '12px',
-                    borderRadius: '0 8px 8px 0',
-                    boxShadow: '5px 0 20px rgba(0,0,0,1)',
-                    zIndex: '10000',
-                    border: '1px solid #444',
-                    borderLeft: 'none',
-                    transition: 'width 0.25s ease'
-                });
-                document.getElementById('toggle-btn').style.display = 'inline';
-                document.getElementById('toggle-btn').innerText = '−';
-                content.classList.add('panel-abierto');
-                content.style.maxHeight = '';
-                btn.title = 'Modo flotante';
-                btn.style.opacity = '0.6';
+                document.getElementById('toggle-btn').style.display = 'none';
+                document.getElementById('btn-flotante').style.opacity = '1';
+                document.getElementById('btn-flotante').title = 'Salir de modo flotante';
+                panelState = 'flotante';
+                panel.style.zoom = '1.3';
             }
         });
     }
@@ -578,13 +657,13 @@
         if (!window.location.href.includes('/monitoring/olt/')) return;
         crearPanel();
 
-    const oltName = document.querySelector('.olt-monitoring-details-olt-title')?.innerText.trim() || "";
-    if (oltName && oltName !== oltActual) {
-        oltActual = oltName;
-        modoCargaInicial = true;
-        logEntradas = [];
-        registroNodos.clear();
-    }
+        const oltName = document.querySelector('.olt-monitoring-details-olt-title')?.innerText.trim() || "";
+        if (oltName && oltName !== oltActual) {
+            oltActual = oltName;
+            modoCargaInicial = true;
+            logEntradas = [];
+            registroNodos.clear();
+        }
         const filas = document.querySelectorAll('tr');
         const criticosActuales = [];
         const ahora = Date.now();
