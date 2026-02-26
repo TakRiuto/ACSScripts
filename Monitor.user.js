@@ -2,7 +2,7 @@
 // @name         OLT Monitor Maestro
 // @namespace    Violentmonkey Scripts
 // @match        *://190.153.58.82/monitoring/olt/*
-// @version      13.7
+// @version      13.8
 // @inject-into  content
 // @run-at       document-end
 // @author       Ing. Adrian Leon
@@ -424,9 +424,9 @@
         document.getElementById('btn-silenciar').addEventListener('click', () => {
             clicksRapidos++;
             clearTimeout(timerClickReset);
-            timerClickReset = setTimeout(() => { clicksRapidos = 0; }, 1000);
+            timerClickReset = setTimeout(() => { clicksRapidos = 0; }, 3000);
 
-            if (clicksRapidos >= 5) {
+            if (clicksRapidos >= 10) {
                 clicksRapidos = 0;
                 clearTimeout(timerMuteTemporal);
                 muteExpiraEn = null;
