@@ -2,7 +2,7 @@
 // @name         OLT Monitor Maestro
 // @namespace    Violentmonkey Scripts
 // @match        *://190.153.58.82/monitoring/olt/*
-// @version      14.7
+// @version      15.1
 // @inject-into  content
 // @run-at       document-end
 // @author       Ing. Adrian Leon
@@ -33,14 +33,14 @@
     // --- ESTADO ---
     let oltActual = "";
     let modoCargaInicial = true;
-    let panelAbiertoAt = 0;
     let umbralValor = parseFloat(localStorage.getItem('oltUmbralValor')) || 30;
     let umbralTipo = localStorage.getItem('oltUmbralTipo') || 'porcentaje';
-    let filtroOp = 'TODOS';
+    let filtroOp = localStorage.getItem('oltFiltroOp') || 'TODOS';
     let logBusqueda = '';
- 
+    let escala = parseFloat(localStorage.getItem('oltPanelEscala')) || 1;
+
     let panelState = 'minimizado';
-    let lastNonFloatingState = 'minimizado';
+    let modoPreferido = localStorage.getItem('oltModoPreferido') || 'abierto';
 
     const registroNodos = new Map();
 
@@ -73,7 +73,6 @@
 
     // --- LOG ---
     let logEntradas = [];
-    let vistaActual = 'alarmas';
 
     function timestamp() {
         const now = new Date();
@@ -250,13 +249,63 @@
         .ctrl:hover, .ctrl:focus { border-color:#ed5565; }
         input[type=number]::-webkit-inner-spin-button { opacity:1; }
 
+        /* Pestañas */
+        .tab-btn { flex:1; padding:4px 0; font-size:10px; font-weight:bold; border:none; border-radius:3px; cursor:pointer; }
+        .tab-active { background:#ed5565; color:white; }
+        .tab-inactive { background:#333; color:#aaa; }
+
+        /* Estados de mute */
+        .mute-permanente {
+            background: #7d3c98 !important;
+            border-color: #9b59b6 !important;
+            color: white !important;
+        }
+        .mute-temporal {
+            background: #784212 !important;
+            border-color: #e67e22 !important;
+            color: white !important;
+        }
+        .mute-off {
+            background: #333 !important;
+            border-color: #555 !important;
+            color: #ccc !important;
+        }
+        /* Mensaje de mute: solo texto neutro, sin fondo */
+        .mute-status-text {
+            background: transparent !important;
+            color: #aaa; /* gris claro, puedes cambiarlo a #ccc o #888 */
+            border: none;
+            padding: 2px 4px;
+            font-size: 10px;
+            font-weight: bold;
+            text-align: center;
+            width: 100%;
+            box-sizing: border-box;
+            white-space: normal;
+            word-wrap: break-word;
+            line-height: 1.3;
+        }
+        #mute-status {
+            width: 100%;
+            box-sizing: border-box;
+            padding: 2px 4px;
+            white-space: normal;
+            word-wrap: break-word;
+            line-height: 1.3;
+            font-size: 10px;
+            font-weight: bold;
+            text-align: center;
+        }
         #alert-content {
             max-height: 0;
             overflow: hidden;
             transition: max-height 0.25s ease;
         }
         #alert-content.panel-abierto {
-            max-height: 80vh;
+            max-height: 60vh;
+        }
+        #olt-alert-panel {
+            transition: width 0.25s ease, padding 0.25s ease, font-size 0.25s ease;
         }
         #olt-alert-panel.modo-flotante {
             left: 50% !important;
@@ -270,17 +319,9 @@
             min-width: 320px;
             min-height: 200px;
         }
-        /* En modo flotante, el cursor del header no es move */
-        #olt-alert-panel.modo-flotante #panel-header {
+        #olt-alert-panel.modo-flotante #panel-drag-handle {
             cursor: pointer;
         }
-        #olt-alert-panel:not(.modo-flotante) #panel-header {
-            cursor: pointer; /* ya era pointer, pero lo dejamos explícito */
-        }
-        #panel-drag-handle {
-            cursor: default !important; /* nunca se arrastra */
-        }
-        /* El botón flotante siempre visible (excepto móvil) */
         #btn-flotante {
             font-size: 13px;
             cursor: pointer;
@@ -290,13 +331,70 @@
         #btn-flotante:hover {
             opacity: 1;
         }
+        /* Botones de zoom */
+        .zoom-buttons {
+            display: flex;
+            gap: 4px;
+            margin-top: 5px;
+            flex-wrap: wrap;
+        }
+        .zoom-btn {
+            background: #333;
+            color: #aaa;
+            border: 1px solid #555;
+            border-radius: 3px;
+            padding: 3px 6px;
+            font-size: 10px;
+            font-weight: bold;
+            cursor: pointer;
+            font-family: 'Google Sans';
+            flex: 1;
+            text-align: center;
+            transition: background 0.2s;
+        }
+        .zoom-btn:hover {
+            background: #444;
+        }
+        .zoom-btn.active {
+            background: #f1c40f;
+            color: #111;
+            border-color: #e67e22;
+        }
+        /* Ocultar botones de zoom cuando no está en modo flotante */
+        #olt-alert-panel:not(.modo-flotante) .zoom-buttons {
+            display: none;
+        }
         @media (max-width: 768px) {
             #btn-flotante {
                 display: none;
             }
         }
+
     `;
     (document.head || document.documentElement).appendChild(style);
+
+    // --- FUNCIONES DE ZOOM ---
+    function aplicarZoom() {
+        const panel = document.getElementById('olt-alert-panel');
+        if (!panel) return;
+        if (panel.classList.contains('modo-flotante')) {
+            panel.style.zoom = escala;
+        } else {
+            panel.style.zoom = '';
+        }
+    }
+
+    function resaltarBotonZoom() {
+        const botones = document.querySelectorAll('.zoom-btn');
+        botones.forEach(btn => {
+            const scaleVal = parseFloat(btn.dataset.scale);
+            if (scaleVal === escala) {
+                btn.classList.add('active');
+            } else {
+                btn.classList.remove('active');
+            }
+        });
+    }
 
     // --- PANEL ---
     function crearPanel() {
@@ -345,11 +443,19 @@
                         </select>
                         <div style="display:flex;align-items:center;justify-content:space-between;gap:4px;">
                             <button id="btn-marcar-todos" style="display:none;flex:1;background:#1ab394;border:none;color:white;font-size:11px;font-weight:bold;padding:5px 0;border-radius:4px;cursor:pointer;">✔ Marcar vistos</button>
-                            <button id="btn-silenciar" style="flex:1;background:#333;border:1px solid #555;color:#ccc;font-size:11px;font-weight:bold;padding:5px 0;border-radius:4px;cursor:pointer;" title="Click para silenciar 60min | 5 clicks = permanente">🔇 Silenciar</button>
+                            <button id="btn-silenciar" class="mute-off" style="flex:1;border:1px solid #555;font-size:11px;font-weight:bold;padding:5px 0;border-radius:4px;cursor:pointer;" title="Click para silenciar 60min | 10 clicks = permanente">🔇 Silenciar</button>
                         </div>
-                        <div id="mute-status" style="display:none;font-size:10px;text-align:center;color:#e67e22;font-weight:bold;"></div>
+                        <div id="mute-status" style="display:none;"></div>
+                        <!-- Botones de zoom con data-scale -->
+                        <div class="zoom-buttons">
+                            <button class="zoom-btn" data-scale="0.75">0.75x</button>
+                            <button class="zoom-btn" data-scale="1">1x</button>
+                            <button class="zoom-btn" data-scale="1.25">1.25x</button>
+                            <button class="zoom-btn" data-scale="1.5">1.5x</button>
+                            <button class="zoom-btn" data-scale="2">2x</button>
+                        </div>
                     </div>
-                    <div id="alert-list" style="max-height:40vh;overflow-y:auto;scrollbar-width:thin;font-family:'Google Sans',monospace;"></div>
+                    <div id="alert-list" style="max-height:60vh;overflow-y:auto;scrollbar-width:thin;font-family:'Google Sans',monospace;"></div>
                 </div>
                 <div id="vista-log" style="display:none;">
                     <input type="text" id="log-busqueda" class="ctrl" style="width:100%;margin-bottom:8px;color:#aaa;" placeholder="🔍 Buscar nodo o urbanismo...">
@@ -357,18 +463,10 @@
                         <button id="btn-exportar-log" style="flex:1;background:#333;border:1px solid #555;color:#aaa;font-size:10px;font-weight:bold;padding:5px 0;border-radius:4px;cursor:pointer;">⬇ .TXT</button>
                         <button id="btn-exportar-csv" style="flex:1;background:#1a3a4a;border:1px solid #1a7a9a;color:#5bc8e8;font-size:10px;font-weight:bold;padding:5px 0;border-radius:4px;cursor:pointer;">⬇ .CSV</button>
                     </div>
-                    <div id="log-list" style="max-height:45vh;overflow-y:auto;scrollbar-width:thin;font-family:'Google Sans',monospace;"></div>
+                    <div id="log-list" style="max-height:60vh;overflow-y:auto;scrollbar-width:thin;font-family:'Google Sans',monospace;"></div>
                 </div>
             </div>
         `;
-
-        const tabStyle = document.createElement('style');
-        tabStyle.innerHTML = `
-            .tab-btn { flex:1; padding:4px 0; font-size:10px; font-weight:bold; border:none; border-radius:3px; cursor:pointer; }
-            .tab-active { background:#ed5565; color:white; }
-            .tab-inactive { background:#333; color:#aaa; }
-        `;
-        document.head.appendChild(tabStyle);
 
         Object.assign(panel.style, {
             position: 'fixed',
@@ -382,20 +480,35 @@
             boxShadow: '5px 0 20px rgba(0,0,0,1)',
             zIndex: '10000',
             border: '1px solid #444',
-            borderLeft: 'none',
-            transition: 'width 0.25s ease'
+            borderLeft: 'none'
         });
         document.body.appendChild(panel);
 
-        function aplicarEstadoPanel(estado) {
+        // --- LÓGICA DE ZOOM ---
+        const zoomBtns = panel.querySelectorAll('.zoom-btn');
+        zoomBtns.forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const nuevaEscala = parseFloat(btn.dataset.scale);
+                if (isNaN(nuevaEscala)) return;
+                escala = nuevaEscala;
+                localStorage.setItem('oltPanelEscala', escala);
+                resaltarBotonZoom();
+                aplicarZoom();
+            });
+        });
+        resaltarBotonZoom();
+
+        function aplicarEstado(estado) {
             const content = document.getElementById('alert-content');
             const btnToggle = document.getElementById('toggle-btn');
             const btnFlotante = document.getElementById('btn-flotante');
             if (estado === 'flotante') {
                 panel.classList.add('modo-flotante');
-                panel.style.width = '960px';
-                panel.style.fontSize = '15px';
+                panel.style.width = '1040px';
                 panel.style.padding = '18px';
+                panel.style.fontSize = '15px';
+                panel.style.zoom = escala;
                 content.classList.add('panel-abierto');
                 content.style.maxHeight = 'none';
                 btnToggle.style.display = 'none';
@@ -404,19 +517,21 @@
             } else if (estado === 'abierto') {
                 panel.classList.remove('modo-flotante');
                 panel.style.width = '300px';
-                panel.style.fontSize = '';
                 panel.style.padding = '12px';
+                panel.style.fontSize = '';
+                panel.style.zoom = '';
                 content.classList.add('panel-abierto');
                 content.style.maxHeight = '';
                 btnToggle.style.display = 'inline';
                 btnToggle.innerText = '−';
                 btnFlotante.style.opacity = '0.6';
                 btnFlotante.title = 'Modo flotante';
-            } else { // minimizado
+            } else {
                 panel.classList.remove('modo-flotante');
                 panel.style.width = '120px';
-                panel.style.fontSize = '';
                 panel.style.padding = '12px';
+                panel.style.fontSize = '';
+                panel.style.zoom = '';
                 content.classList.remove('panel-abierto');
                 content.style.maxHeight = '';
                 btnToggle.style.display = 'inline';
@@ -426,7 +541,7 @@
             }
         }
 
-        aplicarEstadoPanel('minimizado');
+        aplicarEstado('minimizado');
 
         document.getElementById('umbral-valor').value = umbralValor;
         document.getElementById('umbral-tipo').value = umbralTipo;
@@ -455,7 +570,22 @@
         document.getElementById('btn-test-play').onclick = () => {
             detenerSonido();
             enPrueba = true;
-            sonidoAlerta.play().catch(() => {});
+            sonidoAlerta.play()
+                .catch(() => {
+                    const statusEl = document.getElementById('mute-status');
+                    if (statusEl) {
+                        const originalHtml = statusEl.innerHTML;
+                        statusEl.style.display = 'block';
+                        statusEl.style.color = '#ed5565';
+                        statusEl.innerHTML = '❌ Error al reproducir audio';
+                        setTimeout(() => {
+                            if (statusEl.innerHTML === '❌ Error al reproducir audio') {
+                                statusEl.style.display = 'none';
+                                statusEl.innerHTML = originalHtml;
+                            }
+                        }, 3000);
+                    }
+                });
             document.getElementById('btn-test-play').textContent = '🔊';
         };
         document.getElementById('btn-test-stop').onclick = () => {
@@ -464,7 +594,11 @@
             document.getElementById('btn-test-play').textContent = '▶';
         };
 
-        document.getElementById('filtro-op').addEventListener('change', function() { filtroOp = this.value; });
+        document.getElementById('filtro-op').addEventListener('change', function() {
+            filtroOp = this.value;
+            localStorage.setItem('oltFiltroOp', filtroOp);
+        });
+        document.getElementById('filtro-op').value = filtroOp;
 
         document.getElementById('btn-marcar-todos').onclick = () => {
             for (let data of registroNodos.values()) data.reconocido = true;
@@ -472,7 +606,6 @@
             detenerSonido();
         };
 
-        // --- Botón silenciar ---
         let clicksRapidos = 0;
         let timerClickReset = null;
         let timerMuteTemporal = null;
@@ -482,26 +615,24 @@
             const statusEl = document.getElementById('mute-status');
             const btnSil = document.getElementById('btn-silenciar');
             if (!statusEl || !btnSil) return;
+
+            btnSil.classList.remove('mute-permanente', 'mute-temporal', 'mute-off');
+            statusEl.classList.remove('mute-permanente', 'mute-temporal');
+            statusEl.classList.add('mute-status-text');
+
             if (muteGlobal) {
-                btnSil.style.background = '#7d3c98';
-                btnSil.style.borderColor = '#9b59b6';
-                btnSil.style.color = 'white';
+                btnSil.classList.add('mute-permanente');
                 statusEl.style.display = 'block';
-                statusEl.style.color = '#9b59b6';
                 statusEl.textContent = '🔒 Silencio permanente activo';
             } else if (silenciado && muteExpiraEn) {
-                btnSil.style.background = '#784212';
-                btnSil.style.borderColor = '#e67e22';
-                btnSil.style.color = 'white';
+                btnSil.classList.add('mute-temporal');
                 statusEl.style.display = 'block';
-                statusEl.style.color = '#e67e22';
                 const minRestantes = Math.ceil((muteExpiraEn - Date.now()) / 60000);
                 statusEl.textContent = `⏱ Silenciado ${minRestantes}min restantes`;
             } else {
-                btnSil.style.background = '#333';
-                btnSil.style.borderColor = '#555';
-                btnSil.style.color = '#ccc';
+                btnSil.classList.add('mute-off');
                 statusEl.style.display = 'none';
+                statusEl.textContent = '';
             }
         }
 
@@ -561,14 +692,12 @@
         document.getElementById('btn-exportar-csv').onclick = exportarCSV;
 
         document.getElementById('tab-alarmas').onclick = () => {
-            vistaActual = 'alarmas';
             document.getElementById('vista-alarmas').style.display = 'block';
             document.getElementById('vista-log').style.display = 'none';
             document.getElementById('tab-alarmas').className = 'tab-btn tab-active';
             document.getElementById('tab-log').className = 'tab-btn tab-inactive';
         };
         document.getElementById('tab-log').onclick = () => {
-            vistaActual = 'log';
             document.getElementById('vista-alarmas').style.display = 'none';
             document.getElementById('vista-log').style.display = 'block';
             document.getElementById('tab-alarmas').className = 'tab-btn tab-inactive';
@@ -582,67 +711,38 @@
 
         document.getElementById('panel-header').onclick = function(e) {
             if (e.target.id === 'btn-flotante') return;
-            if (panel.classList.contains('modo-flotante')) {
-                panel.classList.remove('modo-flotante');
-                panel.style.width = '120px';
-                panel.style.fontSize = '';
-                panel.style.padding = '12px';
-                const content = document.getElementById('alert-content');
-                content.classList.remove('panel-abierto');
-                content.style.maxHeight = '';
-                document.getElementById('toggle-btn').style.display = 'inline';
-                document.getElementById('toggle-btn').innerText = '+';
-                document.getElementById('btn-flotante').style.opacity = '0.6';
-                document.getElementById('btn-flotante').title = 'Modo flotante';
+            if (panel.classList.contains('modo-flotante') || panelState === 'abierto' || panelState === 'flotante') {
+                aplicarEstado('minimizado');
                 panelState = 'minimizado';
-                lastNonFloatingState = 'minimizado';
             } else {
-                const content = document.getElementById('alert-content');
-                const abriendo = !content.classList.contains('panel-abierto');
-                content.classList.toggle('panel-abierto', abriendo);
-                panel.style.width = abriendo ? '300px' : '120px';
-                document.getElementById('toggle-btn').innerText = abriendo ? '−' : '+';
-                panelAbiertoAt = abriendo ? Date.now() : 0;
-                panelState = abriendo ? 'abierto' : 'minimizado';
-                lastNonFloatingState = panelState;
+                if (modoPreferido === 'flotante') {
+                    aplicarEstado('flotante');
+                    panelState = 'flotante';
+                } else {
+                    aplicarEstado('abierto');
+                    panelState = 'abierto';
+                }
             }
         };
 
         document.getElementById('btn-flotante').addEventListener('click', (e) => {
             e.stopPropagation();
             if (window.innerWidth <= 768) return;
-            const content = document.getElementById('alert-content');
-            if (panel.classList.contains('modo-flotante')) {
-                panel.classList.remove('modo-flotante');
-                panel.style.width = lastNonFloatingState === 'abierto' ? '300px' : '120px';
-                panel.style.fontSize = '';
-                panel.style.padding = '12px';
-                if (lastNonFloatingState === 'abierto') {
-                    content.classList.add('panel-abierto');
-                    content.style.maxHeight = '';
-                    document.getElementById('toggle-btn').innerText = '−';
-                } else {
-                    content.classList.remove('panel-abierto');
-                    content.style.maxHeight = '';
-                    document.getElementById('toggle-btn').innerText = '+';
-                }
-                document.getElementById('toggle-btn').style.display = 'inline';
-                document.getElementById('btn-flotante').style.opacity = '0.6';
-                document.getElementById('btn-flotante').title = 'Modo flotante';
-                panelState = lastNonFloatingState;
-            } else {
-                lastNonFloatingState = panelState;
-                panel.classList.add('modo-flotante');
-                panel.style.width = '960px';
-                panel.style.fontSize = '15px';
-                panel.style.padding = '18px';
-                content.classList.add('panel-abierto');
-                content.style.maxHeight = 'none';
-                document.getElementById('toggle-btn').style.display = 'none';
-                document.getElementById('btn-flotante').style.opacity = '1';
-                document.getElementById('btn-flotante').title = 'Salir de modo flotante';
+            if (panelState === 'minimizado') {
+                modoPreferido = 'flotante';
+                localStorage.setItem('oltModoPreferido', modoPreferido);
+                aplicarEstado('flotante');
                 panelState = 'flotante';
-                panel.style.zoom = '1.3';
+            } else if (panelState === 'abierto') {
+                modoPreferido = 'flotante';
+                localStorage.setItem('oltModoPreferido', modoPreferido);
+                aplicarEstado('flotante');
+                panelState = 'flotante';
+            } else if (panelState === 'flotante') {
+                modoPreferido = 'abierto';
+                localStorage.setItem('oltModoPreferido', modoPreferido);
+                aplicarEstado('abierto');
+                panelState = 'abierto';
             }
         });
     }
@@ -666,7 +766,6 @@
         }
         const filas = document.querySelectorAll('tr');
         const criticosActuales = [];
-        const ahora = Date.now();
         let hayNovedadesParaAlarma = false;
 
         filas.forEach(fila => {
@@ -714,7 +813,7 @@
                         registroNodos.set(idNodo, {
                             origen: modoCargaInicial ? 'inicial' : 'nuevo',
                             reconocido: modoCargaInicial,
-                            timestamp: ahora,
+                            timestamp: Date.now(),
                             offAnterior: off,
                             pDownAnterior: pDown
                         });
@@ -786,6 +885,7 @@
                 });
                 selectOp.value = opsEnOlt.includes(selAnterior) ? selAnterior : 'TODOS';
                 filtroOp = selectOp.value;
+                localStorage.setItem('oltFiltroOp', filtroOp);
             }
         }
 
