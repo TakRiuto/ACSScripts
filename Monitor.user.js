@@ -2,7 +2,7 @@
 // @name         OLT Monitor Maestro
 // @namespace    Violentmonkey Scripts
 // @match        *://190.153.58.82/monitoring/olt/*
-// @version      16.1
+// @version      16.2
 // @inject-into  content
 // @run-at       document-end
 // @author       Ing. Adrian Leon
@@ -375,7 +375,7 @@
                             <button class="zoom-btn" data-scale="2">2x</button>
                         </div>
                     </div>
-                    <div id="alert-list" style="max-height:calc(55dvh - 240px);overflow-y:auto;scrollbar-width:thin;font-family:'Google Sans',monospace;"></div>
+                    <div id="alert-list" style="max-height:calc(60dvh - 240px);overflow-y:auto;scrollbar-width:thin;font-family:'Google Sans',monospace;"></div>
                 </div>
                 <div id="vista-log" style="display:none;">
                     <input type="text" id="log-busqueda" class="ctrl" style="width:100%;margin-bottom:8px;color:#aaa;" placeholder="🔍 Buscar nodo o urbanismo...">
@@ -383,7 +383,7 @@
                         <button id="btn-exportar-log" style="flex:1;background:#333;border:1px solid #555;color:#aaa;font-size:10px;font-weight:bold;padding:5px 0;border-radius:4px;cursor:pointer;">⬇ .TXT</button>
                         <button id="btn-exportar-csv" style="flex:1;background:#1a3a4a;border:1px solid #1a7a9a;color:#5bc8e8;font-size:10px;font-weight:bold;padding:5px 0;border-radius:4px;cursor:pointer;">⬇ .CSV</button>
                     </div>
-                    <div id="log-list" style="max-height:calc(55dvh - 140px);overflow-y:auto;scrollbar-width:thin;font-family:'Google Sans',monospace;"></div>
+                    <div id="log-list" style="max-height:calc(60dvh - 140px);overflow-y:auto;scrollbar-width:thin;font-family:'Google Sans',monospace;"></div>
                 </div>
             </div>
         `;
@@ -424,7 +424,7 @@
                 btnFlotante.style.opacity = '1'; btnFlotante.title = 'Salir de modo flotante';
             } else {
                 panel.classList.remove('modo-flotante');
-                panel.style.width = estado === 'abierto' ? '300px' : '120px';
+                panel.style.width = estado === 'abierto' ? '360px' : '120px';
                 panel.style.padding = '12px'; panel.style.fontSize = ''; panel.style.zoom = '';
                 estado === 'abierto' ? content.classList.add('panel-abierto') : content.classList.remove('panel-abierto');
                 content.style.maxHeight = '';
@@ -452,6 +452,7 @@
             actualizarPestana(oltActual, 0, false);
         };
         document.getElementById('umbral-valor').addEventListener('change', actualizarConfiguracion);
+        document.getElementById('umbral-tipo').addEventListener('change', actualizarConfiguracion);
         document.getElementById('umbral-tipo').addEventListener('change', actualizarConfiguracion);
 
         const selectAlarma = document.getElementById('selector-alarma');
