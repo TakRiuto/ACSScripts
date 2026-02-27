@@ -2,7 +2,7 @@
 // @name         OLT Monitor Maestro
 // @namespace    Violentmonkey Scripts
 // @match        *://190.153.58.82/monitoring/olt/*
-// @version      15.1
+// @version      15.3
 // @inject-into  content
 // @run-at       document-end
 // @author       Ing. Adrian Leon
@@ -19,8 +19,9 @@
 
     // --- CARGA DB ---
     let DB_NODOS = {};
+    let dbCargada = true;
     try {
-        DB_NODOS = await fetch('https://raw.githubusercontent.com/TakRiuto/ACSScripts/refs/heads/release/nodos.json')
+        DB_NODOS = await fetch(`https://raw.githubusercontent.com/TakRiuto/ACSScripts/refs/heads/release/nodos.json?t=${Date.now()}`)
             .then(r => {
                 if (!r.ok) throw new Error(`HTTP ${r.status}`);
                 return r.json();
@@ -28,6 +29,7 @@
         console.log('✅ DB_NODOS cargado:', Object.keys(DB_NODOS).length, 'nodos');
     } catch (e) {
         console.error('❌ Error cargando nodos.json:', e);
+        dbCargada = false;
     }
 
     // --- ESTADO ---
@@ -38,10 +40,11 @@
     let filtroOp = localStorage.getItem('oltFiltroOp') || 'TODOS';
     let logBusqueda = '';
     let escala = parseFloat(localStorage.getItem('oltPanelEscala')) || 1;
-
-    // Estados del panel: 'minimizado', 'abierto', 'flotante'
     let panelState = 'minimizado';
     let modoPreferido = localStorage.getItem('oltModoPreferido') || 'abierto';
+
+    let ultimoHTMLRenderizado = '';
+    let ultimoEstadoPestana = { criticos: -1, hayNuevos: null };
 
     const registroNodos = new Map();
 
@@ -61,8 +64,8 @@
     let silenciado = false;
     let muteGlobal = localStorage.getItem('oltMuteGlobal') === 'true';
     let enPrueba = false;
-
     let audioAutorizado = false;
+
     document.addEventListener('click', () => {
         if (!audioAutorizado) {
             audioAutorizado = true;
@@ -104,12 +107,7 @@
     }
 
     function exportarCSV() {
-        const ESTATUS = {
-            inicial:     'INICIO',
-            nueva_alarma:'ALARMA',
-            empeora:     'EMPEORA',
-            recuperado:  'RECUPERADO'
-        };
+        const ESTATUS = { inicial: 'INICIO', nueva_alarma: 'ALARMA', empeora: 'EMPEORA', recuperado: 'RECUPERADO' };
         const encabezado = ['Fecha', 'Hora', 'OLT', 'Nodo', 'Ubicacion', 'Operadora', 'Estatus', 'Clientes Caidos', 'Clientes Caidos Antes', 'Clientes Totales', 'Porcentaje Caida'];
         const filas = logEntradas.map(e => {
             const [fecha, hora] = e.ts.split(' ');
@@ -117,26 +115,18 @@
             const op = e.datos.op || '';
             const estatus = ESTATUS[e.tipo] || e.tipo;
             let caidos = '', caidosAntes = '', totales = '', porcCaida = '';
+
             if (e.tipo === 'inicial' || e.tipo === 'nueva_alarma') {
-                caidos = e.datos.off ?? '';
-                totales = e.datos.total ?? '';
-                porcCaida = e.datos.pDown != null ? `${e.datos.pDown}%` : '';
+                caidos = e.datos.off ?? ''; totales = e.datos.total ?? ''; porcCaida = e.datos.pDown != null ? `${e.datos.pDown}%` : '';
             } else if (e.tipo === 'empeora') {
-                caidos = e.datos.off ?? '';
-                caidosAntes = e.datos.offAntes ?? '';
-                totales = e.datos.total ?? '';
-                porcCaida = e.datos.pDown != null ? `${e.datos.pDown}%` : '';
+                caidos = e.datos.off ?? ''; caidosAntes = e.datos.offAntes ?? ''; totales = e.datos.total ?? ''; porcCaida = e.datos.pDown != null ? `${e.datos.pDown}%` : '';
             } else if (e.tipo === 'recuperado') {
-                caidos = e.datos.off ?? '';
-                porcCaida = e.datos.pDown != null ? `${e.datos.pDown}%` : '';
+                caidos = e.datos.off ?? ''; porcCaida = e.datos.pDown != null ? `${e.datos.pDown}%` : '';
             }
             const esc = v => `"${String(v).replace(/"/g, '""')}"`;
-            return [esc(fecha), esc(hora), esc(oltActual), esc(e.nodo),
-                esc(zona), esc(op), esc(estatus),
-                esc(caidos), esc(caidosAntes), esc(totales), esc(porcCaida)].join(',');
+            return [esc(fecha), esc(hora), esc(oltActual), esc(e.nodo), esc(zona), esc(op), esc(estatus), esc(caidos), esc(caidosAntes), esc(totales), esc(porcCaida)].join(',');
         });
-        const csv = [encabezado.join(','), ...filas].join('\n');
-        const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
+        const blob = new Blob(['\uFEFF' + [encabezado.join(','), ...filas].join('\n')], { type: 'text/csv;charset=utf-8;' });
         const a = document.createElement('a');
         a.href = URL.createObjectURL(blob);
         a.download = `log_${oltActual}_${new Date().toISOString().slice(0, 10)}.csv`;
@@ -153,25 +143,20 @@
         const colores = { inicial: '#555', nueva_alarma: '#ed5565', empeora: '#e67e22', recuperado: '#1ab394' };
         const iconos = { inicial: '📋', nueva_alarma: '🔴', empeora: '📉', recuperado: '✅' };
         const labels = { inicial: 'INICIO', nueva_alarma: 'ALARMA', empeora: 'EMPEORA', recuperado: 'RECUPERADO' };
+
         const entradasFiltradas = logBusqueda
-        ? logEntradas.filter(e =>
-            e.nodo.toLowerCase().includes(logBusqueda) ||
-            (e.datos.zona || '').toLowerCase().includes(logBusqueda)
-          )
+        ? logEntradas.filter(e => e.nodo.toLowerCase().includes(logBusqueda) || (e.datos.zona || '').toLowerCase().includes(logBusqueda))
         : logEntradas;
 
         if (!entradasFiltradas.length) {
-        contenedor.innerHTML = `<div style="color:#aaa;text-align:center;padding:20px;font-size:11px;">Sin resultados para "<b>${logBusqueda}</b>"</div>`;
-        return;
+            contenedor.innerHTML = `<div style="color:#aaa;text-align:center;padding:20px;font-size:11px;">Sin resultados para "<b>${logBusqueda}</b>"</div>`;
+            return;
         }
         contenedor.innerHTML = entradasFiltradas.map(e => {
             let detalle = '';
-            if (e.tipo === 'inicial' || e.tipo === 'nueva_alarma')
-                detalle = `Total:${e.datos.total} ON:${e.datos.on} OFF:${e.datos.off} <b>${e.datos.pDown}%↓</b>`;
-            if (e.tipo === 'empeora')
-                detalle = `OFF: ${e.datos.offAntes}→<b>${e.datos.off}</b> | ${e.datos.pDownAntes}%→<b>${e.datos.pDown}%</b>`;
-            if (e.tipo === 'recuperado')
-                detalle = `Estaba OFF:${e.datos.off} (${e.datos.pDown}%)`;
+            if (e.tipo === 'inicial' || e.tipo === 'nueva_alarma') detalle = `Total:${e.datos.total} ON:${e.datos.on} OFF:${e.datos.off} <b>${e.datos.pDown}%↓</b>`;
+            if (e.tipo === 'empeora') detalle = `OFF: ${e.datos.offAntes}→<b>${e.datos.off}</b> | ${e.datos.pDownAntes}%→<b>${e.datos.pDown}%</b>`;
+            if (e.tipo === 'recuperado') detalle = `Estaba OFF:${e.datos.off} (${e.datos.pDown}%)`;
             const zona = e.datos.zona || '';
             const op = e.datos.op || '';
             return `
@@ -200,8 +185,13 @@
     const faviconCtx = faviconCanvas.getContext('2d');
 
     function actualizarPestana(oltName, totalCriticos, hayNuevos) {
+        if (ultimoEstadoPestana.criticos === totalCriticos && ultimoEstadoPestana.hayNuevos === hayNuevos) return;
+        ultimoEstadoPestana.criticos = totalCriticos;
+        ultimoEstadoPestana.hayNuevos = hayNuevos;
+
         document.title = totalCriticos > 0 ? `${hayNuevos ? '🆕' : '🔴'} (${totalCriticos}) ${oltName}` : `✅ ${oltName}`;
         const color = totalCriticos > 0 ? (hayNuevos ? '#e74c3c' : '#a93226') : '#1ab394';
+
         faviconCtx.clearRect(0, 0, 32, 32);
         faviconCtx.beginPath();
         faviconCtx.arc(16, 16, 15, 0, 2 * Math.PI);
@@ -210,6 +200,7 @@
         faviconCtx.fillStyle = '#ffffff';
         faviconCtx.textAlign = 'center';
         faviconCtx.textBaseline = 'middle';
+
         if (totalCriticos > 0) {
             faviconCtx.font = `bold ${totalCriticos > 9 ? '14' : '18'}px sans-serif`;
             faviconCtx.fillText(totalCriticos > 99 ? '99+' : totalCriticos, 16, 17);
@@ -224,22 +215,18 @@
     const style = document.createElement('style');
     style.innerHTML = `
         @keyframes pulseACS {
-            0%   { box-shadow: inset 0 0 0px #fff;  background-color: #a93226; }
-            50%  { box-shadow: inset 0 0 20px #fff; background-color: #ed5565; border:1px solid #fff; }
-            100% { box-shadow: inset 0 0 0px #fff;  background-color: #a93226; }
+            0%, 100% { box-shadow: inset 0 0 0px #fff; background-color: #a93226; }
+            50% { box-shadow: inset 0 0 20px #fff; background-color: #ed5565; border:1px solid #fff; }
         }
         @keyframes pulsePanel {
-            0%   { background-color: rgba(237,85,101,0.1); border-left:5px solid #ed5565; }
-            50%  { background-color: rgba(237,85,101,0.6); border-left:5px solid #fff; }
-            100% { background-color: rgba(237,85,101,0.1); border-left:5px solid #ed5565; }
+            0%, 100% { background-color: rgba(237,85,101,0.1); border-left:5px solid #ed5565; }
+            50% { background-color: rgba(237,85,101,0.6); border-left:5px solid #fff; }
         }
         .celda-acs-blink { animation: pulseACS 0.8s infinite !important; }
         .tarjeta-panel-blink { animation: pulsePanel 1s infinite ease-in-out !important; }
         .badge-nuevo {
-            background:#fff !important; color:#ed5565 !important;
-            font-size:10px !important; font-weight:900 !important;
-            padding:2px 6px !important; border-radius:4px !important;
-            margin-left:8px !important; box-shadow:0 0 8px #fff;
+            background:#fff; color:#ed5565; font-size:10px; font-weight:900;
+            padding:2px 6px; border-radius:4px; margin-left:8px; box-shadow:0 0 8px #fff;
         }
         .header-blink { animation:pulsePanel 0.4s infinite alternate !important; box-shadow:0 0 15px #ed5565 !important; }
         .ctrl {
@@ -250,131 +237,45 @@
         .ctrl:hover, .ctrl:focus { border-color:#ed5565; }
         input[type=number]::-webkit-inner-spin-button { opacity:1; }
 
-        /* Pestañas */
         .tab-btn { flex:1; padding:4px 0; font-size:10px; font-weight:bold; border:none; border-radius:3px; cursor:pointer; }
         .tab-active { background:#ed5565; color:white; }
         .tab-inactive { background:#333; color:#aaa; }
 
-        /* Estados de mute */
-        .mute-permanente {
-            background: #7d3c98 !important;
-            border-color: #9b59b6 !important;
-            color: white !important;
-        }
-        .mute-temporal {
-            background: #784212 !important;
-            border-color: #e67e22 !important;
-            color: white !important;
-        }
-        .mute-off {
-            background: #333 !important;
-            border-color: #555 !important;
-            color: #ccc !important;
-        }
-        /* Mensaje de mute: solo texto neutro, sin fondo */
-        .mute-status-text {
-            background: transparent !important;
-            color: #aaa; /* gris claro, puedes cambiarlo a #ccc o #888 */
-            border: none;
-            padding: 2px 4px;
-            font-size: 10px;
-            font-weight: bold;
-            text-align: center;
-            width: 100%;
-            box-sizing: border-box;
-            white-space: normal;
-            word-wrap: break-word;
-            line-height: 1.3;
-        }
-        #mute-status {
-            width: 100%;
-            box-sizing: border-box;
-            padding: 2px 4px;
-            white-space: normal;
-            word-wrap: break-word;
-            line-height: 1.3;
-            font-size: 10px;
-            font-weight: bold;
-            text-align: center;
-        }
-        #alert-content {
-            max-height: 0;
-            overflow: hidden;
-            transition: max-height 0.25s ease;
-        }
-        #alert-content.panel-abierto {
-            max-height: 60vh;
-        }
-        #olt-alert-panel {
-            box-sizing: border-box;
-            transition: width 0.25s ease, padding 0.25s ease, font-size 0.25s ease;
-        }
-        #olt-alert-panel.modo-flotante {
-            left: 50% !important;
-            bottom: auto !important;
-            top: 50% !important;
-            transform: translate(-50%, -50%);
-            border-radius: 8px !important;
-            border: 1px solid #555 !important;
-            resize: both;
-            overflow: auto;
-            min-width: 320px;
-            min-height: 200px;
-        }
-        #olt-alert-panel.modo-flotante #panel-drag-handle {
-            cursor: pointer;
-        }
-        #btn-flotante {
-            font-size: 13px;
-            cursor: pointer;
-            opacity: 0.6;
-            user-select: none;
-        }
-        #btn-flotante:hover {
-            opacity: 1;
-        }
-        /* Botones de zoom */
-        .zoom-buttons {
-            display: flex;
-            gap: 4px;
-            margin-top: 5px;
-            flex-wrap: wrap;
-        }
-        .zoom-btn {
-            background: #333;
-            color: #aaa;
-            border: 1px solid #555;
-            border-radius: 3px;
-            padding: 3px 6px;
-            font-size: 10px;
-            font-weight: bold;
-            cursor: pointer;
-            font-family: 'Google Sans';
-            flex: 1;
-            text-align: center;
-            transition: background 0.2s;
-        }
-        .zoom-btn:hover {
-            background: #444;
-        }
-        .zoom-btn.active {
-            background: #f1c40f;
-            color: #111;
-            border-color: #e67e22;
-        }
-        /* Ocultar botones de zoom cuando no está en modo flotante */
-        #olt-alert-panel:not(.modo-flotante) .zoom-buttons {
-            display: none;
-        }
-        @media (max-width: 768px) {
-            #olt-alert-panel.panel-abierto {
-                width: calc(100% - 20px) !important; /* 10px de margen a cada lado */
-                max-width: 300px; /* opcional, para que no se estire demasiado en tablets pequeñas */
-                left: 10px !important; /* centrado con margen izquierdo */
-                /* Si prefieres centrarlo exactamente, usa left: 50%; transform: translateX(-50%); pero necesitarías quitar el left fijo de abierto */
-            }
-        }
+        .mute-permanente { background: #7d3c98 !important; border-color: #9b59b6 !important; color: white !important; }
+        .mute-temporal { background: #784212 !important; border-color: #e67e22 !important; color: white !important; }
+        .mute-off { background: #333 !important; border-color: #555 !important; color: #ccc !important; }
 
+        #mute-status {
+            width: 100%; box-sizing: border-box; padding: 2px 4px; white-space: normal;
+            word-wrap: break-word; line-height: 1.3; font-size: 10px; font-weight: bold; text-align: center;
+        }
+        .mute-status-text { background: transparent !important; color: #aaa; border: none; }
+
+        #alert-content { max-height: 0; overflow: hidden; transition: max-height 0.25s ease; }
+        #alert-content.panel-abierto { max-height: 85dvh; overflow-y: auto; }
+
+        #olt-alert-panel { transition: width 0.25s ease, padding 0.25s ease, font-size 0.25s ease; }
+        #olt-alert-panel.modo-flotante {
+            left: 50% !important; bottom: auto !important; top: 50% !important;
+            transform: translate(-50%, -50%); border-radius: 8px !important;
+            border: 1px solid #555 !important; resize: both; overflow: auto; min-width: 320px; min-height: 200px;
+        }
+        #olt-alert-panel.modo-flotante #panel-drag-handle { cursor: pointer; }
+
+        #btn-flotante { font-size: 13px; cursor: pointer; opacity: 0.6; user-select: none; }
+        #btn-flotante:hover { opacity: 1; }
+
+        .zoom-buttons { display: flex; gap: 4px; margin-top: 5px; flex-wrap: wrap; }
+        .zoom-btn {
+            background: #333; color: #aaa; border: 1px solid #555; border-radius: 3px;
+            padding: 3px 6px; font-size: 10px; font-weight: bold; cursor: pointer;
+            font-family: 'Google Sans'; flex: 1; text-align: center; transition: background 0.2s;
+        }
+        .zoom-btn:hover { background: #444; }
+        .zoom-btn.active { background: #f1c40f; color: #111; border-color: #e67e22; }
+
+        #olt-alert-panel:not(.modo-flotante) .zoom-buttons { display: none; }
+        @media (max-width: 768px) { #btn-flotante { display: none; } }
     `;
     (document.head || document.documentElement).appendChild(style);
 
@@ -382,22 +283,12 @@
     function aplicarZoom() {
         const panel = document.getElementById('olt-alert-panel');
         if (!panel) return;
-        if (panel.classList.contains('modo-flotante')) {
-            panel.style.zoom = escala;
-        } else {
-            panel.style.zoom = '';
-        }
+        panel.style.zoom = panel.classList.contains('modo-flotante') ? escala : '';
     }
 
     function resaltarBotonZoom() {
-        const botones = document.querySelectorAll('.zoom-btn');
-        botones.forEach(btn => {
-            const scaleVal = parseFloat(btn.dataset.scale);
-            if (scaleVal === escala) {
-                btn.classList.add('active');
-            } else {
-                btn.classList.remove('active');
-            }
+        document.querySelectorAll('.zoom-btn').forEach(btn => {
+            parseFloat(btn.dataset.scale) === escala ? btn.classList.add('active') : btn.classList.remove('active');
         });
     }
 
@@ -416,6 +307,7 @@
                     <span id="toggle-btn" style="font-size:16px;">+</span>
                 </div>
             </div>
+            ${!dbCargada ? '<div style="background:#a93226;color:white;text-align:center;font-size:9px;padding:2px;border-radius:3px;margin-bottom:5px;">⚠️ Fallo DB_NODOS</div>' : ''}
             <div id="alert-content">
                 <div style="display:flex;gap:4px;margin-bottom:10px;">
                     <button id="tab-alarmas" class="tab-btn tab-active">🚨 Alarmas</button>
@@ -451,7 +343,6 @@
                             <button id="btn-silenciar" class="mute-off" style="flex:1;border:1px solid #555;font-size:11px;font-weight:bold;padding:5px 0;border-radius:4px;cursor:pointer;" title="Click para silenciar 60min | 10 clicks = permanente">🔇 Silenciar</button>
                         </div>
                         <div id="mute-status" style="display:none;"></div>
-                        <!-- Botones de zoom con data-scale -->
                         <div class="zoom-buttons">
                             <button class="zoom-btn" data-scale="0.75">0.75x</button>
                             <button class="zoom-btn" data-scale="1">1x</button>
@@ -460,7 +351,7 @@
                             <button class="zoom-btn" data-scale="2">2x</button>
                         </div>
                     </div>
-                    <div id="alert-list" style="max-height:60vh;overflow-y:auto;scrollbar-width:thin;font-family:'Google Sans',monospace;"></div>
+                    <div id="alert-list" style="max-height:calc(55dvh - 240px);overflow-y:auto;scrollbar-width:thin;font-family:'Google Sans',monospace;"></div>
                 </div>
                 <div id="vista-log" style="display:none;">
                     <input type="text" id="log-busqueda" class="ctrl" style="width:100%;margin-bottom:8px;color:#aaa;" placeholder="🔍 Buscar nodo o urbanismo...">
@@ -468,32 +359,21 @@
                         <button id="btn-exportar-log" style="flex:1;background:#333;border:1px solid #555;color:#aaa;font-size:10px;font-weight:bold;padding:5px 0;border-radius:4px;cursor:pointer;">⬇ .TXT</button>
                         <button id="btn-exportar-csv" style="flex:1;background:#1a3a4a;border:1px solid #1a7a9a;color:#5bc8e8;font-size:10px;font-weight:bold;padding:5px 0;border-radius:4px;cursor:pointer;">⬇ .CSV</button>
                     </div>
-                    <div id="log-list" style="max-height:60vh;overflow-y:auto;scrollbar-width:thin;font-family:'Google Sans',monospace;"></div>
+                    <div id="log-list" style="max-height:calc(55dvh - 140px);overflow-y:auto;scrollbar-width:thin;font-family:'Google Sans',monospace;"></div>
                 </div>
             </div>
         `;
 
-        // No es necesario crear tabStyle aparte, ya está en CSS
-
         Object.assign(panel.style, {
-            position: 'fixed',
-            bottom: '20px',
-            left: '0px',
-            width: '120px',
-            backgroundColor: 'rgba(5,5,5,0.98)',
-            color: 'white',
-            padding: '12px',
-            borderRadius: '0 8px 8px 0',
-            boxShadow: '5px 0 20px rgba(0,0,0,1)',
-            zIndex: '10000',
-            border: '1px solid #444',
-            borderLeft: 'none'
+            position: 'fixed', bottom: '20px', left: '0px', width: '120px',
+            backgroundColor: 'rgba(5,5,5,0.98)', color: 'white', padding: '12px',
+            borderRadius: '0 8px 8px 0', boxShadow: '5px 0 20px rgba(0,0,0,1)',
+            zIndex: '10000', border: '1px solid #444', borderLeft: 'none'
         });
         document.body.appendChild(panel);
 
         // --- LÓGICA DE ZOOM ---
-        const zoomBtns = panel.querySelectorAll('.zoom-btn');
-        zoomBtns.forEach(btn => {
+        panel.querySelectorAll('.zoom-btn').forEach(btn => {
             btn.addEventListener('click', (e) => {
                 e.stopPropagation();
                 const nuevaEscala = parseFloat(btn.dataset.scale);
@@ -510,43 +390,21 @@
             const content = document.getElementById('alert-content');
             const btnToggle = document.getElementById('toggle-btn');
             const btnFlotante = document.getElementById('btn-flotante');
+
             if (estado === 'flotante') {
                 panel.classList.add('modo-flotante');
-                panel.classList.remove('panel-abierto');
-                panel.style.width = '1040px';
-                panel.style.padding = '18px';
-                panel.style.fontSize = '15px';
-                panel.style.zoom = escala;
-                content.classList.add('panel-abierto');
-                content.style.maxHeight = 'none';
-                btnToggle.style.display = 'none';
-                btnFlotante.style.opacity = '1';
-                btnFlotante.title = 'Salir de modo flotante';
-            } else if (estado === 'abierto') {
-                panel.classList.remove('modo-flotante');
-                panel.classList.add('panel-abierto');
-                panel.style.width = '300px';
-                panel.style.padding = '12px';
-                panel.style.fontSize = '';
-                panel.style.zoom = ''; // reset zoom
-                content.classList.add('panel-abierto');
-                content.style.maxHeight = '';
-                btnToggle.style.display = 'inline';
-                btnToggle.innerText = '−';
-                btnFlotante.style.opacity = '0.6';
-                btnFlotante.title = 'Modo flotante';
+                panel.style.width = '1040px'; panel.style.padding = '18px'; panel.style.fontSize = '15px'; panel.style.zoom = escala;
+                content.classList.add('panel-abierto'); content.style.maxHeight = 'none';
+                btnToggle.style.display = 'none'; btnFlotante.style.opacity = '1'; btnFlotante.title = 'Salir de modo flotante';
             } else {
                 panel.classList.remove('modo-flotante');
-                panel.style.width = '120px';
-                panel.style.padding = '12px';
-                panel.style.fontSize = '';
-                panel.style.zoom = '';
-                content.classList.remove('modo-flotante', 'panel-abierto');
+                panel.style.width = estado === 'abierto' ? '300px' : '120px';
+                panel.style.padding = '12px'; panel.style.fontSize = ''; panel.style.zoom = '';
+
+                estado === 'abierto' ? content.classList.add('panel-abierto') : content.classList.remove('panel-abierto');
                 content.style.maxHeight = '';
-                btnToggle.style.display = 'inline';
-                btnToggle.innerText = '+';
-                btnFlotante.style.opacity = '0.6';
-                btnFlotante.title = 'Modo flotante';
+                btnToggle.style.display = 'inline'; btnToggle.innerText = estado === 'abierto' ? '−' : '+';
+                btnFlotante.style.opacity = '0.6'; btnFlotante.title = 'Modo flotante';
             }
         }
 
@@ -563,6 +421,7 @@
             modoCargaInicial = true;
             registroNodos.clear();
         };
+
         document.getElementById('umbral-valor').addEventListener('change', actualizarConfiguracion);
         document.getElementById('umbral-tipo').addEventListener('change', actualizarConfiguracion);
 
@@ -572,32 +431,27 @@
             detenerSonido();
             sonidoAlerta = AUDIOS[this.value] || AUDIOS.alarm;
             localStorage.setItem('oltAlarmaSeleccionada', this.value);
-            const hayActivas = [...registroNodos.values()].some(d => !d.reconocido);
-            if (hayActivas && !silenciado && !muteGlobal) sonidoAlerta.play().catch(() => {});
+            if ([...registroNodos.values()].some(d => !d.reconocido) && !silenciado && !muteGlobal) sonidoAlerta.play().catch(() => {});
         });
 
         document.getElementById('btn-test-play').onclick = () => {
             detenerSonido();
             enPrueba = true;
-            sonidoAlerta.play()
-                .catch(() => {
-                    // Mostrar error temporal en el panel
-                    const statusEl = document.getElementById('mute-status');
-                    if (statusEl) {
-                        const originalHtml = statusEl.innerHTML;
-                        statusEl.style.display = 'block';
-                        statusEl.style.color = '#ed5565';
-                        statusEl.innerHTML = '❌ Error al reproducir audio';
-                        setTimeout(() => {
-                            if (statusEl.innerHTML === '❌ Error al reproducir audio') {
-                                statusEl.style.display = 'none';
-                                statusEl.innerHTML = originalHtml;
-                            }
-                        }, 3000);
-                    }
-                });
+            sonidoAlerta.play().catch(() => {
+                const statusEl = document.getElementById('mute-status');
+                if (statusEl) {
+                    const originalHtml = statusEl.innerHTML;
+                    statusEl.style.display = 'block'; statusEl.style.color = '#ed5565'; statusEl.innerHTML = '❌ Error al reproducir audio';
+                    setTimeout(() => {
+                        if (statusEl.innerHTML === '❌ Error al reproducir audio') {
+                            statusEl.style.display = 'none'; statusEl.innerHTML = originalHtml;
+                        }
+                    }, 3000);
+                }
+            });
             document.getElementById('btn-test-play').textContent = '🔊';
         };
+
         document.getElementById('btn-test-stop').onclick = () => {
             enPrueba = false;
             detenerSonido();
@@ -605,19 +459,15 @@
         };
 
         document.getElementById('filtro-op').addEventListener('change', function() {
-            filtroOp = this.value;
-            localStorage.setItem('oltFiltroOp', filtroOp);
+            filtroOp = this.value; localStorage.setItem('oltFiltroOp', filtroOp);
         });
-        // Establecer valor inicial del select
         document.getElementById('filtro-op').value = filtroOp;
 
         document.getElementById('btn-marcar-todos').onclick = () => {
             for (let data of registroNodos.values()) data.reconocido = true;
-            enPrueba = false;
-            detenerSonido();
+            enPrueba = false; detenerSonido();
         };
 
-        // --- Botón silenciar ---
         let clicksRapidos = 0;
         let timerClickReset = null;
         let timerMuteTemporal = null;
@@ -628,25 +478,17 @@
             const btnSil = document.getElementById('btn-silenciar');
             if (!statusEl || !btnSil) return;
 
-            // Limpiar clases del botón
             btnSil.classList.remove('mute-permanente', 'mute-temporal', 'mute-off');
-            // Al mensaje solo le asignamos una clase fija para texto neutro (y le quitamos las de color por si acaso)
             statusEl.classList.remove('mute-permanente', 'mute-temporal');
-            statusEl.classList.add('mute-status-text'); // clase nueva
+            statusEl.classList.add('mute-status-text');
 
             if (muteGlobal) {
-                btnSil.classList.add('mute-permanente');
-                statusEl.style.display = 'block';
-                statusEl.textContent = '🔒 Silencio permanente activo';
+                btnSil.classList.add('mute-permanente'); statusEl.style.display = 'block'; statusEl.textContent = '🔒 Silencio permanente activo';
             } else if (silenciado && muteExpiraEn) {
-                btnSil.classList.add('mute-temporal');
-                statusEl.style.display = 'block';
-                const minRestantes = Math.ceil((muteExpiraEn - Date.now()) / 60000);
-                statusEl.textContent = `⏱ Silenciado ${minRestantes}min restantes`;
+                btnSil.classList.add('mute-temporal'); statusEl.style.display = 'block';
+                statusEl.textContent = `⏱ Silenciado ${Math.ceil((muteExpiraEn - Date.now()) / 60000)}min restantes`;
             } else {
-                btnSil.classList.add('mute-off');
-                statusEl.style.display = 'none';
-                statusEl.textContent = '';
+                btnSil.classList.add('mute-off'); statusEl.style.display = 'none'; statusEl.textContent = '';
             }
         }
 
@@ -658,45 +500,23 @@
             timerClickReset = setTimeout(() => { clicksRapidos = 0; }, 3000);
 
             if (clicksRapidos >= 10) {
-                clicksRapidos = 0;
-                clearTimeout(timerMuteTemporal);
-                muteExpiraEn = null;
-                muteGlobal = true;
-                silenciado = true;
-                localStorage.setItem('oltMuteGlobal', 'true');
-                enPrueba = false;
-                detenerSonido();
-                aplicarMuteEstado();
-                return;
+                clicksRapidos = 0; clearTimeout(timerMuteTemporal); muteExpiraEn = null;
+                muteGlobal = true; silenciado = true; localStorage.setItem('oltMuteGlobal', 'true');
+                enPrueba = false; detenerSonido(); aplicarMuteEstado(); return;
             }
             if (muteGlobal) {
-                clicksRapidos = 0;
-                muteGlobal = false;
-                silenciado = false;
-                muteExpiraEn = null;
-                localStorage.setItem('oltMuteGlobal', 'false');
-                aplicarMuteEstado();
-                return;
+                clicksRapidos = 0; muteGlobal = false; silenciado = false; muteExpiraEn = null;
+                localStorage.setItem('oltMuteGlobal', 'false'); aplicarMuteEstado(); return;
             }
             if (silenciado && muteExpiraEn) {
-                clearTimeout(timerMuteTemporal);
-                timerMuteTemporal = null;
-                silenciado = false;
-                muteExpiraEn = null;
-                aplicarMuteEstado();
-                return;
+                clearTimeout(timerMuteTemporal); timerMuteTemporal = null; silenciado = false; muteExpiraEn = null;
+                aplicarMuteEstado(); return;
             }
             const DURACION_MS = 60 * 60 * 1000;
             muteExpiraEn = Date.now() + DURACION_MS;
-            silenciado = true;
-            enPrueba = false;
-            detenerSonido();
+            silenciado = true; enPrueba = false; detenerSonido();
             clearTimeout(timerMuteTemporal);
-            timerMuteTemporal = setTimeout(() => {
-                silenciado = false;
-                muteExpiraEn = null;
-                aplicarMuteEstado();
-            }, DURACION_MS);
+            timerMuteTemporal = setTimeout(() => { silenciado = false; muteExpiraEn = null; aplicarMuteEstado(); }, DURACION_MS);
             aplicarMuteEstado();
         });
 
@@ -706,58 +526,33 @@
         document.getElementById('btn-exportar-csv').onclick = exportarCSV;
 
         document.getElementById('tab-alarmas').onclick = () => {
-            document.getElementById('vista-alarmas').style.display = 'block';
-            document.getElementById('vista-log').style.display = 'none';
-            document.getElementById('tab-alarmas').className = 'tab-btn tab-active';
-            document.getElementById('tab-log').className = 'tab-btn tab-inactive';
+            document.getElementById('vista-alarmas').style.display = 'block'; document.getElementById('vista-log').style.display = 'none';
+            document.getElementById('tab-alarmas').className = 'tab-btn tab-active'; document.getElementById('tab-log').className = 'tab-btn tab-inactive';
         };
         document.getElementById('tab-log').onclick = () => {
-            document.getElementById('vista-alarmas').style.display = 'none';
-            document.getElementById('vista-log').style.display = 'block';
-            document.getElementById('tab-alarmas').className = 'tab-btn tab-inactive';
-            document.getElementById('tab-log').className = 'tab-btn tab-active';
+            document.getElementById('vista-alarmas').style.display = 'none'; document.getElementById('vista-log').style.display = 'block';
+            document.getElementById('tab-alarmas').className = 'tab-btn tab-inactive'; document.getElementById('tab-log').className = 'tab-btn tab-active';
             renderizarLog();
         };
         document.getElementById('log-busqueda').addEventListener('input', function() {
-            logBusqueda = this.value.trim().toLowerCase();
-            renderizarLog();
+            logBusqueda = this.value.trim().toLowerCase(); renderizarLog();
         });
 
         document.getElementById('panel-header').onclick = function(e) {
             if (e.target.id === 'btn-flotante') return;
             if (panel.classList.contains('modo-flotante') || panelState === 'abierto' || panelState === 'flotante') {
-                aplicarEstado('minimizado');
-                panelState = 'minimizado';
+                aplicarEstado('minimizado'); panelState = 'minimizado';
             } else {
-                if (modoPreferido === 'flotante') {
-                    aplicarEstado('flotante');
-                    panelState = 'flotante';
-                } else {
-                    aplicarEstado('abierto');
-                    panelState = 'abierto';
-                }
+                aplicarEstado(modoPreferido); panelState = modoPreferido;
             }
         };
 
         document.getElementById('btn-flotante').addEventListener('click', (e) => {
             e.stopPropagation();
             if (window.innerWidth <= 768) return;
-            if (panelState === 'minimizado') {
-                modoPreferido = 'flotante';
-                localStorage.setItem('oltModoPreferido', modoPreferido);
-                aplicarEstado('flotante');
-                panelState = 'flotante';
-            } else if (panelState === 'abierto') {
-                modoPreferido = 'flotante';
-                localStorage.setItem('oltModoPreferido', modoPreferido);
-                aplicarEstado('flotante');
-                panelState = 'flotante';
-            } else if (panelState === 'flotante') {
-                modoPreferido = 'abierto';
-                localStorage.setItem('oltModoPreferido', modoPreferido);
-                aplicarEstado('abierto');
-                panelState = 'abierto';
-            }
+            modoPreferido = panelState === 'flotante' ? 'abierto' : 'flotante';
+            localStorage.setItem('oltModoPreferido', modoPreferido);
+            aplicarEstado(modoPreferido); panelState = modoPreferido;
         });
     }
 
@@ -773,20 +568,45 @@
 
         const oltName = document.querySelector('.olt-monitoring-details-olt-title')?.innerText.trim() || "";
         if (oltName && oltName !== oltActual) {
-            oltActual = oltName;
-            modoCargaInicial = true;
-            logEntradas = [];
-            registroNodos.clear();
+            oltActual = oltName; modoCargaInicial = true; logEntradas = []; registroNodos.clear();
         }
+
         const filas = document.querySelectorAll('tr');
-        const criticosActuales = [];
-        let hayNovedadesParaAlarma = false;
+
+                // --- VALIDACIÓN DE CARGA AJAX ---
+                let tablaCargada = false;
+                for (let fila of filas) {
+                    const celdas = fila.querySelectorAll('td');
+                    if (celdas.length >= 2) {
+                        const slotStr = celdas[0].querySelector('strong')?.innerText.trim();
+                        if (slotStr && /^\d+$/.test(slotStr)) {
+                            tablaCargada = true;
+                            break;
+                        }
+                    }
+                }
+
+                if (!tablaCargada) {
+                    const listContainer = document.getElementById('alert-list');
+                    const msgCarga = '<div style="color:#aaa;text-align:center;padding:20px;font-size:11px;">⏳ Esperando datos...</div>';
+                    if (listContainer && ultimoHTMLRenderizado !== msgCarga) {
+                        listContainer.innerHTML = msgCarga;
+                        ultimoHTMLRenderizado = msgCarga;
+                        document.title = `⏳ Cargando ${oltActual}...`;
+                    }
+                    return;
+                }
+
+                const criticosActuales = [];
+                let hayNovedadesParaAlarma = false;
 
         filas.forEach(fila => {
             const celdas = fila.querySelectorAll('td');
             if (celdas.length < 2) return;
+
             const slotStrong = celdas[0].querySelector('strong');
             if (!slotStrong) return;
+
             const slotStr = slotStrong.innerText.trim().padStart(2, '0');
             if (!/^\d+$/.test(slotStr)) return;
 
@@ -795,8 +615,8 @@
                 const tituloPuerto = celdaPort.querySelector('.table-cell-head strong')?.innerText.trim() || '';
                 const matchPuerto = tituloPuerto.match(/^Port\s+(\d+)$/i);
                 if (!matchPuerto) continue;
-                const portStr = matchPuerto[1].padStart(2, '0');
 
+                const portStr = matchPuerto[1].padStart(2, '0');
                 const on = parseInt(celdaPort.querySelector('.label-green')?.innerText) || 0;
                 const off = parseInt(celdaPort.querySelector('.label-danger')?.innerText) || 0;
                 const total = on + off;
@@ -813,9 +633,7 @@
                     labelPrincipal = etiquetas[0];
                     labelPrincipal.innerHTML = `<div style="line-height:1.1;"><b style="font-size:11px;">${pDown}% DN</b><br><span style="font-size:9px;">${pUp}% UP</span></div>`;
                     for (let j = 1; j < etiquetas.length; j++) {
-                        if (!etiquetas[j].classList.contains('label-success')) {
-                            etiquetas[j].style.display = 'none';
-                        }
+                        if (!etiquetas[j].classList.contains('label-success')) etiquetas[j].style.display = 'none';
                     }
                 }
 
@@ -840,13 +658,8 @@
                     } else {
                         const data = registroNodos.get(idNodo);
                         if (off > data.offAnterior) {
-                            registrarLog('empeora', idNodo, {
-                                ...datosNodo,
-                                offAntes: data.offAnterior,
-                                pDownAntes: data.pDownAnterior
-                            });
-                            data.offAnterior = off;
-                            data.pDownAnterior = pDown;
+                            registrarLog('empeora', idNodo, { ...datosNodo, offAntes: data.offAnterior, pDownAntes: data.pDownAnterior });
+                            data.offAnterior = off; data.pDownAnterior = pDown;
                         }
                     }
 
@@ -862,11 +675,9 @@
 
                     criticosActuales.push({ id: idNodo, down: pDown, off, total, ...info, esNuevoParaPanel });
 
-                } else {
-                    if (labelPrincipal) {
-                        labelPrincipal.className = "label";
-                        labelPrincipal.style.cssText = `display:inline-block!important;width:68px!important;background-color:#1ab394!important;color:white!important;border-radius:4px;text-align:center;`;
-                    }
+                } else if (labelPrincipal) {
+                    labelPrincipal.className = "label";
+                    labelPrincipal.style.cssText = `display:inline-block!important;width:68px!important;background-color:#1ab394!important;color:white!important;border-radius:4px;text-align:center;`;
                 }
             }
         });
@@ -893,14 +704,10 @@
                 while (selectOp.options.length > 1) selectOp.remove(1);
                 opsEnOlt.forEach(op => {
                     const opt = document.createElement('option');
-                    opt.value = op;
-                    opt.textContent = op;
-                    selectOp.appendChild(opt);
+                    opt.value = op; opt.textContent = op; selectOp.appendChild(opt);
                 });
                 selectOp.value = opsEnOlt.includes(selAnterior) ? selAnterior : 'TODOS';
-                filtroOp = selectOp.value;
-                // Guardar en localStorage (opcional, pero consistente)
-                localStorage.setItem('oltFiltroOp', filtroOp);
+                filtroOp = selectOp.value; localStorage.setItem('oltFiltroOp', filtroOp);
             }
         }
 
@@ -931,7 +738,11 @@
                     ? `<div style="color:#aaa;text-align:center;padding:20px;font-size:11px;">Sin alarmas para <b>${filtroOp}</b></div>`
                     : '<div style="color:#1ab394;text-align:center;padding:20px;font-weight:bold;">SISTEMA OK ✅</div>';
 
-            if (listContainer.innerHTML !== nuevoHTML) listContainer.innerHTML = nuevoHTML;
+            // Comprobación de estado en memoria antes de afectar el DOM
+            if (ultimoHTMLRenderizado !== nuevoHTML) {
+                listContainer.innerHTML = nuevoHTML;
+                ultimoHTMLRenderizado = nuevoHTML;
+            }
         }
 
         actualizarPestana(oltActual, criticosActuales.length, hayAlgoSinLeer);
