@@ -2,7 +2,7 @@
 // @name         OLT Monitor Maestro
 // @namespace    Violentmonkey Scripts
 // @match        *://190.153.58.82/monitoring/olt/*
-// @version      16.2
+// @version      16.3
 // @inject-into  content
 // @run-at       document-end
 // @author       Ing. Adrian Leon
@@ -453,7 +453,6 @@
         };
         document.getElementById('umbral-valor').addEventListener('change', actualizarConfiguracion);
         document.getElementById('umbral-tipo').addEventListener('change', actualizarConfiguracion);
-        document.getElementById('umbral-tipo').addEventListener('change', actualizarConfiguracion);
 
         const selectAlarma = document.getElementById('selector-alarma');
         selectAlarma.value = alarmaGuardada in AUDIOS ? alarmaGuardada : 'dosimeter';
@@ -496,6 +495,7 @@
         document.getElementById('btn-marcar-todos').onclick = () => {
             for (let data of registroNodos.values()) data.reconocido = true;
             enPrueba = false; detenerSonido();
+            procesarNodos();
         };
 
         // --- Silenciador ---
@@ -576,7 +576,6 @@
             logBusqueda = this.value.trim().toLowerCase(); renderizarLog();
         });
 
-        // --- Toggle panel: minimizado ↔ modoPreferido ---
         document.getElementById('panel-header').onclick = function(e) {
             if (e.target.id === 'btn-flotante') return;
             if (panelState === 'minimizado') {
@@ -588,7 +587,6 @@
             }
         };
 
-        // --- Botón flotante: cambia modoPreferido sin afectar minimizado ---
         document.getElementById('btn-flotante').addEventListener('click', (e) => {
             e.stopPropagation();
             if (window.innerWidth <= 768) return;
@@ -692,7 +690,7 @@
                             totalAnterior: total
                         });
                         if (comoInicial) {
-                            registrarLog('inicial_alarma', idNodo, datosNodo);
+                            registrarLog('inicial', idNodo, datosNodo);
                         } else {
                             hayNovedadesParaAlarma = true;
                             registrarLog('nueva_alarma', idNodo, { ...datosNodo, offPrev, onPrev, pDownPrev });
@@ -745,25 +743,13 @@
         if (hayNovedadesParaAlarma && !silenciado && !muteGlobal) sonidoAlerta.play().catch(() => {});
         if (!enPrueba && criticosActuales.length === 0) detenerSonido();
 
-        const idsActivos = new Set(criticosActuales.map(c => c.id));
-        for (let [id, data] of registroNodos.entries()) {
-            if (!idsActivos.has(id)) {
-                if (!modoCargaInicial) {
-                    registrarLog('recuperado', id, {
-                        offAntes: data.offAnterior, onAntes: data.onAnterior, pDownAntes: data.pDownAnterior,
-                        offActual: 0, onActual: 0, pDownActual: '0',
-                        total: data.totalAnterior, zona: '', op: ''
-                    });
-                }
-                registroNodos.delete(id);
-            }
-        }
-
         modoCargaInicial = false;
 
         const selectOp = document.getElementById('filtro-op');
         if (selectOp) {
             const opsEnOlt = [...new Set(criticosActuales.map(c => c.op).filter(Boolean))].sort();
+            if (filtroOp !== 'TODOS' && !opsEnOlt.includes(filtroOp)) opsEnOlt.push(filtroOp);
+            opsEnOlt.sort();
             const opcionesActuales = [...selectOp.options].slice(1).map(o => o.value);
             if (JSON.stringify(opsEnOlt) !== JSON.stringify(opcionesActuales)) {
                 const selAnterior = selectOp.value;
