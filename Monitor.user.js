@@ -2,7 +2,7 @@
 // @name         OLT Monitor Maestro
 // @namespace    Violentmonkey Scripts
 // @match        *://190.153.58.82/monitoring/olt/*
-// @version      15.4
+// @version      16.1
 // @inject-into  content
 // @run-at       document-end
 // @author       Ing. Adrian Leon
@@ -17,7 +17,9 @@
     'use strict';
     if (window.self !== window.top) return;
 
-    // --- CARGA DB ---
+    // =========================================================
+    // DB
+    // =========================================================
     let DB_NODOS = {};
     let dbCargada = true;
     try {
@@ -32,7 +34,9 @@
         dbCargada = false;
     }
 
-    // --- ESTADO ---
+    // =========================================================
+    // ESTADO
+    // =========================================================
     let oltActual = "";
     let modoCargaInicial = true;
     let umbralValor = parseFloat(localStorage.getItem('oltUmbralValor')) || 30;
@@ -47,8 +51,11 @@
     let ultimoEstadoPestana = { criticos: -1, hayNuevos: null };
 
     const registroNodos = new Map();
+    const memoriaRedGlobal = new Map();
 
-    // --- AUDIOS DE ALARMA ---
+    // =========================================================
+    // AUDIO
+    // =========================================================
     const AUDIOS = {
         dosimeter:    new Audio('https://actions.google.com/sounds/v1/alarms/dosimeter_alarm.ogg'),
         alarm:        new Audio('https://www.myinstants.com/media/sounds/alarm.MP3'),
@@ -75,7 +82,14 @@
         }
     }, { once: true });
 
-    // --- LOG ---
+    function detenerSonido() {
+        sonidoAlerta.pause();
+        sonidoAlerta.currentTime = 0;
+    }
+
+    // =========================================================
+    // LOG
+    // =========================================================
     let logEntradas = [];
 
     function timestamp() {
@@ -87,17 +101,20 @@
 
     function registrarLog(tipo, nodo, datos) {
         logEntradas.unshift({ tipo, nodo, datos, ts: timestamp() });
+        if (logEntradas.length > 2000) logEntradas.splice(2000);
         renderizarLog();
     }
 
     function exportarLog() {
-        const lineas = [`OLT: ${oltActual}`, `Exportado: ${timestamp()}`, '─'.repeat(60)];
+        const lineas = [`OLT: ${oltActual} - LOG DE EVENTOS`, `Exportado: ${timestamp()}`, '─'.repeat(80)];
         logEntradas.forEach(e => {
-            const base = `[${e.ts}] ${e.nodo}`;
-            if (e.tipo === 'inicial') lineas.push(`${base} | INICIO    | Total:${e.datos.total} ON:${e.datos.on} OFF:${e.datos.off} (${e.datos.pDown}% caída)`);
-            if (e.tipo === 'nueva_alarma') lineas.push(`${base} | ALARMA    | Total:${e.datos.total} ON:${e.datos.on} OFF:${e.datos.off} (${e.datos.pDown}% caída)`);
-            if (e.tipo === 'empeora') lineas.push(`${base} | EMPEORA   | OFF:${e.datos.offAntes}→${e.datos.off} (${e.datos.pDownAntes}%→${e.datos.pDown}%)`);
-            if (e.tipo === 'recuperado') lineas.push(`${base} | RECUPERADO| OFF:${e.datos.offAntes}→${e.datos.offActual} (${e.datos.pDownAntes}%→${e.datos.pDownActual}%)`);
+            const b = `[${e.ts}] ${e.nodo}`;
+            if (e.tipo === 'inicial')        lineas.push(`${b} | INICIO     | ON:${e.datos.on} OFF:${e.datos.off} (${e.datos.pDown}%) | TOT: ${e.datos.total} (${e.datos.zona} | ${e.datos.op})`);
+            if (e.tipo === 'inicial_alarma') lineas.push(`${b} | INI_ALARM  | ON:${e.datos.on} OFF:${e.datos.off} (${e.datos.pDown}%) | TOT: ${e.datos.total} (${e.datos.zona} | ${e.datos.op})`);
+            if (e.tipo === 'nueva_alarma')   lineas.push(`${b} | ALARMA     | Antes:ON:${e.datos.onPrev||0} OFF:${e.datos.offPrev||0} (${e.datos.pDownPrev||0}%) -> Ahora:ON:${e.datos.on} OFF:${e.datos.off} (${e.datos.pDown}%) | TOT: ${e.datos.total}`);
+            if (e.tipo === 'empeora')        lineas.push(`${b} | EMPEORA    | Antes:ON:${e.datos.onAntes} OFF:${e.datos.offAntes} (${e.datos.pDownAntes||0}%) -> Ahora:ON:${e.datos.on} OFF:${e.datos.off} (${e.datos.pDown}%) | TOT: ${e.datos.total}`);
+            if (e.tipo === 'mejora')         lineas.push(`${b} | MEJORA     | Antes:ON:${e.datos.onAntes} OFF:${e.datos.offAntes} (${e.datos.pDownAntes||0}%) -> Ahora:ON:${e.datos.on} OFF:${e.datos.off} (${e.datos.pDown}%) | TOT: ${e.datos.total}`);
+            if (e.tipo === 'recuperado')     lineas.push(`${b} | RECUPERA   | Antes: ON:${e.datos.onAntes} OFF:${e.datos.offAntes} (${e.datos.pDownAntes}%) -> Ahora: ON:${e.datos.onActual} OFF:${e.datos.offActual} (${e.datos.pDownActual}%) | TOT: ${e.datos.total}`);
         });
         const blob = new Blob([lineas.join('\n')], { type: 'text/plain' });
         const a = document.createElement('a');
@@ -107,26 +124,27 @@
     }
 
     function exportarCSV() {
-        const ESTATUS = { inicial: 'INICIO', nueva_alarma: 'ALARMA', empeora: 'EMPEORA', recuperado: 'RECUPERADO' };
-        const encabezado = ['Fecha', 'Hora', 'OLT', 'Nodo', 'Ubicacion', 'Operadora', 'Estatus', 'Clientes Caidos', 'Clientes Caidos Antes', 'Clientes Totales', 'Porcentaje Caida'];
+        const ESTATUS = { inicial: 'INICIO', inicial_alarma: 'INICIO_ALARMADO', nueva_alarma: 'ALARMA', empeora: 'EMPEORA', mejora: 'MEJORA', recuperado: 'RECUPERADO' };
+        const esc = v => `"${String(v).replace(/"/g, '""')}"`;
+        const enc = ['Fecha', 'Hora', 'OLT', 'Nodo', 'Ubicacion', 'Operadora', 'Estatus', 'ON Ant', 'OFF Ant', '% Ant', 'ON Act', 'OFF Act', '% Act', 'TOT'];
         const filas = logEntradas.map(e => {
             const [fecha, hora] = e.ts.split(' ');
-            const zona = e.datos.zona || '';
-            const op = e.datos.op || '';
-            const estatus = ESTATUS[e.tipo] || e.tipo;
-            let caidos = '', caidosAntes = '', totales = '', porcCaida = '';
-
-            if (e.tipo === 'inicial' || e.tipo === 'nueva_alarma') {
-                caidos = e.datos.off ?? ''; totales = e.datos.total ?? ''; porcCaida = e.datos.pDown != null ? `${e.datos.pDown}%` : '';
-            } else if (e.tipo === 'empeora') {
-                caidos = e.datos.off ?? ''; caidosAntes = e.datos.offAntes ?? ''; totales = e.datos.total ?? ''; porcCaida = e.datos.pDown != null ? `${e.datos.pDown}%` : '';
+            let oA = '', oF = '', pA = '', nA = '', nF = '', pN = '', total = '';
+            if (e.tipo === 'inicial' || e.tipo === 'inicial_alarma') {
+                nA = e.datos.on; nF = e.datos.off; pN = `${e.datos.pDown}%`; total = e.datos.total;
+            } else if (e.tipo === 'nueva_alarma') {
+                oA = e.datos.onPrev||0; oF = e.datos.offPrev||0; pA = `${e.datos.pDownPrev||0}%`;
+                nA = e.datos.on; nF = e.datos.off; pN = `${e.datos.pDown}%`; total = e.datos.total;
+            } else if (e.tipo === 'empeora' || e.tipo === 'mejora') {
+                oA = e.datos.onAntes; oF = e.datos.offAntes; pA = `${e.datos.pDownAntes||0}%`;
+                nA = e.datos.on; nF = e.datos.off; pN = `${e.datos.pDown}%`; total = e.datos.total;
             } else if (e.tipo === 'recuperado') {
-                caidos = e.datos.offActual ?? ''; caidosAntes = e.datos.offAntes ?? ''; totales = e.datos.total ?? ''; porcCaida = e.datos.pDownActual != null ? `${e.datos.pDownActual}%` : '';
+                oA = e.datos.onAntes; oF = e.datos.offAntes; pA = `${e.datos.pDownAntes||0}%`;
+                nA = e.datos.onActual; nF = e.datos.offActual; pN = `${e.datos.pDownActual||0}%`; total = e.datos.onActual + e.datos.offActual;
             }
-            const esc = v => `"${String(v).replace(/"/g, '""')}"`;
-            return [esc(fecha), esc(hora), esc(oltActual), esc(e.nodo), esc(zona), esc(op), esc(estatus), esc(caidos), esc(caidosAntes), esc(totales), esc(porcCaida)].join(',');
+            return [esc(fecha), esc(hora), esc(oltActual), esc(e.nodo), esc(e.datos.zona||''), esc(e.datos.op||''), esc(ESTATUS[e.tipo]||e.tipo), oA, oF, esc(pA), nA, nF, esc(pN), esc(total)].join(',');
         });
-        const blob = new Blob(['\uFEFF' + [encabezado.join(','), ...filas].join('\n')], { type: 'text/csv;charset=utf-8;' });
+        const blob = new Blob(['\uFEFF' + [enc.join(','), ...filas].join('\n')], { type: 'text/csv;charset=utf-8;' });
         const a = document.createElement('a');
         a.href = URL.createObjectURL(blob);
         a.download = `log_${oltActual}_${new Date().toISOString().slice(0, 10)}.csv`;
@@ -137,28 +155,35 @@
         const contenedor = document.getElementById('log-list');
         if (!contenedor) return;
         if (logEntradas.length === 0) {
-            contenedor.innerHTML = '<div style="color:#aaa; text-align:center; padding:20px; font-size:11px;">Sin eventos registrados.</div>';
+            contenedor.innerHTML = '<div style="color:#aaa;text-align:center;padding:20px;font-size:11px;">Sin eventos registrados.</div>';
             return;
         }
-        const colores = { inicial: '#555', nueva_alarma: '#ed5565', empeora: '#e67e22', recuperado: '#1ab394' };
-        const iconos = { inicial: '📋', nueva_alarma: '🔴', empeora: '📉', recuperado: '✅' };
-        const labels = { inicial: 'INICIO', nueva_alarma: 'ALARMA', empeora: 'EMPEORA', recuperado: 'RECUPERADO' };
+        const colores = { inicial: '#555', inicial_alarma: '#ed5565', nueva_alarma: '#ed5565', empeora: '#e67e22', mejora: '#f1c40f', recuperado: '#1ab394' };
+        const iconos  = { inicial: '📋', inicial_alarma: '🔴', nueva_alarma: '🔴', empeora: '📉', mejora: '📈', recuperado: '✅' };
+        const labels  = { inicial: 'INICIO', inicial_alarma: 'INICIO (ALARMADO)', nueva_alarma: 'ALARMA', empeora: 'EMPEORA', mejora: 'MEJORA', recuperado: 'RECUPERADO' };
 
         const entradasFiltradas = logBusqueda
-        ? logEntradas.filter(e => e.nodo.toLowerCase().includes(logBusqueda) || (e.datos.zona || '').toLowerCase().includes(logBusqueda))
-        : logEntradas;
+            ? logEntradas.filter(e => e.nodo.toLowerCase().includes(logBusqueda) || (e.datos.zona || '').toLowerCase().includes(logBusqueda))
+            : logEntradas;
 
         if (!entradasFiltradas.length) {
             contenedor.innerHTML = `<div style="color:#aaa;text-align:center;padding:20px;font-size:11px;">Sin resultados para "<b>${logBusqueda}</b>"</div>`;
             return;
         }
+
         contenedor.innerHTML = entradasFiltradas.map(e => {
             let detalle = '';
-            if (e.tipo === 'inicial' || e.tipo === 'nueva_alarma') detalle = `Total:${e.datos.total} ON:${e.datos.on} OFF:${e.datos.off} <b>${e.datos.pDown}%↓</b>`;
-            if (e.tipo === 'empeora') detalle = `OFF: ${e.datos.offAntes}→<b>${e.datos.off}</b> | ${e.datos.pDownAntes}%→<b>${e.datos.pDown}%</b>`;
-            if (e.tipo === 'recuperado') detalle = `OFF: ${e.datos.offAntes}→<b>${e.datos.offActual}</b> | ${e.datos.pDownAntes}%→<b>${e.datos.pDownActual}%</b>`;
+            if (e.tipo === 'inicial' || e.tipo === 'inicial_alarma') {
+                detalle = `ON: <b>${e.datos.on}</b> | OFF: <b>${e.datos.off}</b> (${e.datos.pDown}%) | TOT: ${e.datos.total}`;
+            } else if (e.tipo === 'nueva_alarma') {
+                detalle = `Antes: ON:${e.datos.onPrev||0} OFF:${e.datos.offPrev||0} (${e.datos.pDownPrev||0}%) → <b>Ahora: ON:${e.datos.on} OFF:${e.datos.off} (${e.datos.pDown}%)</b>`;
+            } else if (e.tipo === 'empeora' || e.tipo === 'mejora') {
+                detalle = `Antes: ON:${e.datos.onAntes} OFF:${e.datos.offAntes} (${e.datos.pDownAntes||0}%) → <b>Ahora: ON:${e.datos.on} OFF:${e.datos.off} (${e.datos.pDown}%)</b>`;
+            } else if (e.tipo === 'recuperado') {
+                detalle = `Antes: ON:${e.datos.onAntes} OFF:${e.datos.offAntes} (${e.datos.pDownAntes}%) → <b>Ahora: ON:${e.datos.onActual} OFF:${e.datos.offActual} (${e.datos.pDownActual}%)</b>`;
+            }
             const zona = e.datos.zona || '';
-            const op = e.datos.op || '';
+            const op   = e.datos.op   || '';
             return `
                 <div style="margin-bottom:7px;padding:7px 8px;border-left:4px solid ${colores[e.tipo]};background:rgba(255,255,255,0.04);border-radius:0 4px 4px 0;">
                     <div style="display:flex;justify-content:space-between;align-items:center;">
@@ -172,7 +197,9 @@
         }).join('');
     }
 
-    // --- FAVICON ---
+    // =========================================================
+    // FAVICON
+    // =========================================================
     let faviconEl = document.querySelector("link[rel~='icon']");
     if (!faviconEl) {
         faviconEl = document.createElement('link');
@@ -188,10 +215,8 @@
         if (ultimoEstadoPestana.criticos === totalCriticos && ultimoEstadoPestana.hayNuevos === hayNuevos) return;
         ultimoEstadoPestana.criticos = totalCriticos;
         ultimoEstadoPestana.hayNuevos = hayNuevos;
-
         document.title = totalCriticos > 0 ? `${hayNuevos ? '🆕' : '🔴'} (${totalCriticos}) ${oltName}` : `✅ ${oltName}`;
         const color = totalCriticos > 0 ? (hayNuevos ? '#e74c3c' : '#a93226') : '#1ab394';
-
         faviconCtx.clearRect(0, 0, 32, 32);
         faviconCtx.beginPath();
         faviconCtx.arc(16, 16, 15, 0, 2 * Math.PI);
@@ -200,7 +225,6 @@
         faviconCtx.fillStyle = '#ffffff';
         faviconCtx.textAlign = 'center';
         faviconCtx.textBaseline = 'middle';
-
         if (totalCriticos > 0) {
             faviconCtx.font = `bold ${totalCriticos > 9 ? '14' : '18'}px sans-serif`;
             faviconCtx.fillText(totalCriticos > 99 ? '99+' : totalCriticos, 16, 17);
@@ -211,7 +235,9 @@
         faviconEl.href = faviconCanvas.toDataURL('image/png');
     }
 
-    // --- CSS ---
+    // =========================================================
+    // CSS
+    // =========================================================
     const style = document.createElement('style');
     style.innerHTML = `
         @keyframes pulseACS {
@@ -236,50 +262,46 @@
         }
         .ctrl:hover, .ctrl:focus { border-color:#ed5565; }
         input[type=number]::-webkit-inner-spin-button { opacity:1; }
-
         .tab-btn { flex:1; padding:4px 0; font-size:10px; font-weight:bold; border:none; border-radius:3px; cursor:pointer; }
         .tab-active { background:#ed5565; color:white; }
         .tab-inactive { background:#333; color:#aaa; }
-
-        .mute-permanente { background: #7d3c98 !important; border-color: #9b59b6 !important; color: white !important; }
-        .mute-temporal { background: #784212 !important; border-color: #e67e22 !important; color: white !important; }
-        .mute-off { background: #333 !important; border-color: #555 !important; color: #ccc !important; }
-
+        .mute-permanente { background:#7d3c98 !important; border-color:#9b59b6 !important; color:white !important; }
+        .mute-temporal { background:#784212 !important; border-color:#e67e22 !important; color:white !important; }
+        .mute-off { background:#333 !important; border-color:#555 !important; color:#ccc !important; }
         #mute-status {
-            width: 100%; box-sizing: border-box; padding: 2px 4px; white-space: normal;
-            word-wrap: break-word; line-height: 1.3; font-size: 10px; font-weight: bold; text-align: center;
+            width:100%; box-sizing:border-box; padding:2px 4px; white-space:normal;
+            word-wrap:break-word; line-height:1.3; font-size:10px; font-weight:bold; text-align:center;
         }
-        .mute-status-text { background: transparent !important; color: #aaa; border: none; }
-
-        #alert-content { max-height: 0; overflow: hidden; transition: max-height 0.25s ease; }
-        #alert-content.panel-abierto { max-height: 85dvh; overflow-y: auto; }
-
-        #olt-alert-panel { transition: width 0.25s ease, padding 0.25s ease, font-size 0.25s ease; }
+        .mute-status-text { background:transparent !important; color:#aaa; border:none; }
+        #alert-content { max-height:0; overflow:hidden; transition:max-height 0.25s ease; }
+        #alert-content.panel-abierto { max-height:85dvh; overflow-y:auto; }
+        #olt-alert-panel { transition:width 0.25s ease, padding 0.25s ease, font-size 0.25s ease; }
         #olt-alert-panel.modo-flotante {
-            left: 50% !important; bottom: auto !important; top: 50% !important;
-            transform: translate(-50%, -50%); border-radius: 8px !important;
-            border: 1px solid #555 !important; resize: both; overflow: auto; min-width: 320px; min-height: 200px;
+            left:50% !important; bottom:auto !important; top:50% !important;
+            transform:translate(-50%, -50%); border-radius:8px !important;
+            border:1px solid #555 !important; resize:both; overflow:auto; min-width:320px; min-height:200px;
         }
-        #olt-alert-panel.modo-flotante #panel-drag-handle { cursor: pointer; }
-
-        #btn-flotante { font-size: 13px; cursor: pointer; opacity: 0.6; user-select: none; }
-        #btn-flotante:hover { opacity: 1; }
-
-        .zoom-buttons { display: flex; gap: 4px; margin-top: 5px; flex-wrap: wrap; }
+        #olt-alert-panel.modo-flotante #panel-drag-handle { cursor:pointer; }
+        #btn-flotante { font-size:13px; cursor:pointer; opacity:0.6; user-select:none; }
+        #btn-flotante:hover { opacity:1; }
+        .zoom-buttons { display:flex; gap:4px; margin-top:5px; flex-wrap:wrap; }
         .zoom-btn {
-            background: #333; color: #aaa; border: 1px solid #555; border-radius: 3px;
-            padding: 3px 6px; font-size: 10px; font-weight: bold; cursor: pointer;
-            font-family: 'Google Sans'; flex: 1; text-align: center; transition: background 0.2s;
+            background:#333; color:#aaa; border:1px solid #555; border-radius:3px;
+            padding:3px 6px; font-size:10px; font-weight:bold; cursor:pointer;
+            font-family:'Google Sans'; flex:1; text-align:center; transition:background 0.2s;
         }
-        .zoom-btn:hover { background: #444; }
-        .zoom-btn.active { background: #f1c40f; color: #111; border-color: #e67e22; }
-
-        #olt-alert-panel:not(.modo-flotante) .zoom-buttons { display: none; }
-        @media (max-width: 768px) { #btn-flotante { display: none; } }
+        .zoom-btn:hover { background:#444; }
+        .zoom-btn.active { background:#f1c40f; color:#111; border-color:#e67e22; }
+        #olt-alert-panel:not(.modo-flotante) .zoom-buttons { display:none; }
+        @media (max-width: 768px) { #btn-flotante { display:none; } }
+        #umbral-valor::-webkit-inner-spin-button,
+        #umbral-valor::-webkit-outer-spin-button { display: none; }
     `;
     (document.head || document.documentElement).appendChild(style);
 
-    // --- FUNCIONES DE ZOOM ---
+    // =========================================================
+    // ZOOM
+    // =========================================================
     function aplicarZoom() {
         const panel = document.getElementById('olt-alert-panel');
         if (!panel) return;
@@ -292,7 +314,9 @@
         });
     }
 
-    // --- PANEL ---
+    // =========================================================
+    // PANEL
+    // =========================================================
     function crearPanel() {
         if (document.getElementById('olt-alert-panel')) return;
         const panel = document.createElement('div');
@@ -340,7 +364,7 @@
                         </select>
                         <div style="display:flex;align-items:center;justify-content:space-between;gap:4px;">
                             <button id="btn-marcar-todos" style="display:none;flex:1;background:#1ab394;border:none;color:white;font-size:11px;font-weight:bold;padding:5px 0;border-radius:4px;cursor:pointer;">✔ Marcar vistos</button>
-                            <button id="btn-silenciar" class="mute-off" style="flex:1;border:1px solid #555;font-size:11px;font-weight:bold;padding:5px 0;border-radius:4px;cursor:pointer;" title="Click para silenciar 60min | 10 clicks = permanente">🔇 Silenciar</button>
+                            <button id="btn-silenciar" class="mute-off" style="flex:1;border:1px solid #555;font-size:11px;font-weight:bold;padding:5px 0;border-radius:4px;cursor:pointer;">🔇 Silenciar</button>
                         </div>
                         <div id="mute-status" style="display:none;"></div>
                         <div class="zoom-buttons">
@@ -372,7 +396,7 @@
         });
         document.body.appendChild(panel);
 
-        // --- LÓGICA DE ZOOM ---
+        // --- Zoom ---
         panel.querySelectorAll('.zoom-btn').forEach(btn => {
             btn.addEventListener('click', (e) => {
                 e.stopPropagation();
@@ -386,21 +410,22 @@
         });
         resaltarBotonZoom();
 
+        // --- Máquina de estados del panel ---
         function aplicarEstado(estado) {
-            const content = document.getElementById('alert-content');
-            const btnToggle = document.getElementById('toggle-btn');
+            const content    = document.getElementById('alert-content');
+            const btnToggle  = document.getElementById('toggle-btn');
             const btnFlotante = document.getElementById('btn-flotante');
 
             if (estado === 'flotante') {
                 panel.classList.add('modo-flotante');
                 panel.style.width = '1040px'; panel.style.padding = '18px'; panel.style.fontSize = '15px'; panel.style.zoom = escala;
                 content.classList.add('panel-abierto'); content.style.maxHeight = 'none';
-                btnToggle.style.display = 'none'; btnFlotante.style.opacity = '1'; btnFlotante.title = 'Salir de modo flotante';
+                btnToggle.style.display = 'none';
+                btnFlotante.style.opacity = '1'; btnFlotante.title = 'Salir de modo flotante';
             } else {
                 panel.classList.remove('modo-flotante');
                 panel.style.width = estado === 'abierto' ? '300px' : '120px';
                 panel.style.padding = '12px'; panel.style.fontSize = ''; panel.style.zoom = '';
-
                 estado === 'abierto' ? content.classList.add('panel-abierto') : content.classList.remove('panel-abierto');
                 content.style.maxHeight = '';
                 btnToggle.style.display = 'inline'; btnToggle.innerText = estado === 'abierto' ? '−' : '+';
@@ -410,18 +435,22 @@
 
         aplicarEstado('minimizado');
 
+        // --- Controles ---
         document.getElementById('umbral-valor').value = umbralValor;
-        document.getElementById('umbral-tipo').value = umbralTipo;
+        document.getElementById('umbral-tipo').value  = umbralTipo;
 
         const actualizarConfiguracion = () => {
             umbralValor = parseFloat(document.getElementById('umbral-valor').value) || 0;
-            umbralTipo = document.getElementById('umbral-tipo').value;
+            umbralTipo  = document.getElementById('umbral-tipo').value;
             localStorage.setItem('oltUmbralValor', umbralValor);
-            localStorage.setItem('oltUmbralTipo', umbralTipo);
+            localStorage.setItem('oltUmbralTipo',  umbralTipo);
             modoCargaInicial = true;
             registroNodos.clear();
+            memoriaRedGlobal.clear();
+            logEntradas = [];
+            document.getElementById('log-list').innerHTML = '';
+            actualizarPestana(oltActual, 0, false);
         };
-
         document.getElementById('umbral-valor').addEventListener('change', actualizarConfiguracion);
         document.getElementById('umbral-tipo').addEventListener('change', actualizarConfiguracion);
 
@@ -440,18 +469,18 @@
             sonidoAlerta.play().catch(() => {
                 const statusEl = document.getElementById('mute-status');
                 if (statusEl) {
-                    const originalHtml = statusEl.innerHTML;
-                    statusEl.style.display = 'block'; statusEl.style.color = '#ed5565'; statusEl.innerHTML = '❌ Error al reproducir audio';
+                    const orig = statusEl.innerHTML;
+                    statusEl.style.display = 'block'; statusEl.style.color = '#ed5565';
+                    statusEl.innerHTML = '❌ Error al reproducir audio';
                     setTimeout(() => {
                         if (statusEl.innerHTML === '❌ Error al reproducir audio') {
-                            statusEl.style.display = 'none'; statusEl.innerHTML = originalHtml;
+                            statusEl.style.display = 'none'; statusEl.innerHTML = orig;
                         }
                     }, 3000);
                 }
             });
             document.getElementById('btn-test-play').textContent = '🔊';
         };
-
         document.getElementById('btn-test-stop').onclick = () => {
             enPrueba = false;
             detenerSonido();
@@ -468,6 +497,7 @@
             enPrueba = false; detenerSonido();
         };
 
+        // --- Silenciador ---
         let clicksRapidos = 0;
         let timerClickReset = null;
         let timerMuteTemporal = null;
@@ -475,20 +505,21 @@
 
         function aplicarMuteEstado() {
             const statusEl = document.getElementById('mute-status');
-            const btnSil = document.getElementById('btn-silenciar');
+            const btnSil   = document.getElementById('btn-silenciar');
             if (!statusEl || !btnSil) return;
-
             btnSil.classList.remove('mute-permanente', 'mute-temporal', 'mute-off');
             statusEl.classList.remove('mute-permanente', 'mute-temporal');
             statusEl.classList.add('mute-status-text');
-
             if (muteGlobal) {
-                btnSil.classList.add('mute-permanente'); statusEl.style.display = 'block'; statusEl.textContent = '🔒 Silencio permanente activo';
+                btnSil.classList.add('mute-permanente');
+                statusEl.style.display = 'block'; statusEl.textContent = '🔒 Silencio permanente activo';
             } else if (silenciado && muteExpiraEn) {
-                btnSil.classList.add('mute-temporal'); statusEl.style.display = 'block';
+                btnSil.classList.add('mute-temporal');
+                statusEl.style.display = 'block';
                 statusEl.textContent = `⏱ Silenciado ${Math.ceil((muteExpiraEn - Date.now()) / 60000)}min restantes`;
             } else {
-                btnSil.classList.add('mute-off'); statusEl.style.display = 'none'; statusEl.textContent = '';
+                btnSil.classList.add('mute-off');
+                statusEl.style.display = 'none'; statusEl.textContent = '';
             }
         }
 
@@ -498,7 +529,6 @@
             clicksRapidos++;
             clearTimeout(timerClickReset);
             timerClickReset = setTimeout(() => { clicksRapidos = 0; }, 3000);
-
             if (clicksRapidos >= 10) {
                 clicksRapidos = 0; clearTimeout(timerMuteTemporal); muteExpiraEn = null;
                 muteGlobal = true; silenciado = true; localStorage.setItem('oltMuteGlobal', 'true');
@@ -509,11 +539,13 @@
                 localStorage.setItem('oltMuteGlobal', 'false'); aplicarMuteEstado(); return;
             }
             if (silenciado && muteExpiraEn) {
-                clearTimeout(timerMuteTemporal); timerMuteTemporal = null; silenciado = false; muteExpiraEn = null;
-                aplicarMuteEstado(); return;
+                clicksRapidos = 0;
+                clearTimeout(timerMuteTemporal); timerMuteTemporal = null;
+                silenciado = false; muteExpiraEn = null; aplicarMuteEstado(); return;
             }
             const DURACION_MS = 60 * 60 * 1000;
             muteExpiraEn = Date.now() + DURACION_MS;
+            clicksRapidos = 0;
             silenciado = true; enPrueba = false; detenerSonido();
             clearTimeout(timerMuteTemporal);
             timerMuteTemporal = setTimeout(() => { silenciado = false; muteExpiraEn = null; aplicarMuteEstado(); }, DURACION_MS);
@@ -525,64 +557,68 @@
         document.getElementById('btn-exportar-log').onclick = exportarLog;
         document.getElementById('btn-exportar-csv').onclick = exportarCSV;
 
+        // --- Tabs ---
         document.getElementById('tab-alarmas').onclick = () => {
-            document.getElementById('vista-alarmas').style.display = 'block'; document.getElementById('vista-log').style.display = 'none';
-            document.getElementById('tab-alarmas').className = 'tab-btn tab-active'; document.getElementById('tab-log').className = 'tab-btn tab-inactive';
+            document.getElementById('vista-alarmas').style.display = 'block';
+            document.getElementById('vista-log').style.display = 'none';
+            document.getElementById('tab-alarmas').className = 'tab-btn tab-active';
+            document.getElementById('tab-log').className     = 'tab-btn tab-inactive';
         };
         document.getElementById('tab-log').onclick = () => {
-            document.getElementById('vista-alarmas').style.display = 'none'; document.getElementById('vista-log').style.display = 'block';
-            document.getElementById('tab-alarmas').className = 'tab-btn tab-inactive'; document.getElementById('tab-log').className = 'tab-btn tab-active';
+            document.getElementById('vista-alarmas').style.display = 'none';
+            document.getElementById('vista-log').style.display = 'block';
+            document.getElementById('tab-alarmas').className = 'tab-btn tab-inactive';
+            document.getElementById('tab-log').className     = 'tab-btn tab-active';
             renderizarLog();
         };
         document.getElementById('log-busqueda').addEventListener('input', function() {
             logBusqueda = this.value.trim().toLowerCase(); renderizarLog();
         });
 
+        // --- Toggle panel: minimizado ↔ modoPreferido ---
         document.getElementById('panel-header').onclick = function(e) {
             if (e.target.id === 'btn-flotante') return;
-            if (panel.classList.contains('modo-flotante') || panelState === 'abierto' || panelState === 'flotante') {
-                aplicarEstado('minimizado'); panelState = 'minimizado';
+            if (panelState === 'minimizado') {
+                aplicarEstado(modoPreferido);
+                panelState = modoPreferido;
             } else {
-                aplicarEstado(modoPreferido); panelState = modoPreferido;
+                aplicarEstado('minimizado');
+                panelState = 'minimizado';
             }
         };
 
+        // --- Botón flotante: cambia modoPreferido sin afectar minimizado ---
         document.getElementById('btn-flotante').addEventListener('click', (e) => {
             e.stopPropagation();
             if (window.innerWidth <= 768) return;
             modoPreferido = panelState === 'flotante' ? 'abierto' : 'flotante';
             localStorage.setItem('oltModoPreferido', modoPreferido);
-            aplicarEstado(modoPreferido); panelState = modoPreferido;
+            aplicarEstado(modoPreferido);
+            panelState = modoPreferido;
         });
     }
 
-    function detenerSonido() {
-        sonidoAlerta.pause();
-        sonidoAlerta.currentTime = 0;
-    }
-
-    // --- LOOP PRINCIPAL ---
+    // =========================================================
+    // LOOP PRINCIPAL
+    // =========================================================
     function procesarNodos() {
         if (!window.location.href.includes('/monitoring/olt/')) return;
         crearPanel();
 
         const oltName = document.querySelector('.olt-monitoring-details-olt-title')?.innerText.trim() || "";
         if (oltName && oltName !== oltActual) {
-            oltActual = oltName; modoCargaInicial = true; logEntradas = []; registroNodos.clear();
+            oltActual = oltName; modoCargaInicial = true;
+            logEntradas = []; registroNodos.clear(); memoriaRedGlobal.clear();
         }
 
         const filas = document.querySelectorAll('tr');
 
-        // --- VALIDACIÓN DE CARGA AJAX ---
         let tablaCargada = false;
         for (let fila of filas) {
             const celdas = fila.querySelectorAll('td');
             if (celdas.length >= 2) {
                 const slotStr = celdas[0].querySelector('strong')?.innerText.trim();
-                if (slotStr && /^\d+$/.test(slotStr)) {
-                    tablaCargada = true;
-                    break;
-                }
+                if (slotStr && /^\d+$/.test(slotStr)) { tablaCargada = true; break; }
             }
         }
 
@@ -603,10 +639,8 @@
         filas.forEach(fila => {
             const celdas = fila.querySelectorAll('td');
             if (celdas.length < 2) return;
-
             const slotStrong = celdas[0].querySelector('strong');
             if (!slotStrong) return;
-
             const slotStr = slotStrong.innerText.trim().padStart(2, '0');
             if (!/^\d+$/.test(slotStr)) return;
 
@@ -617,15 +651,20 @@
                 if (!matchPuerto) continue;
 
                 const portStr = matchPuerto[1].padStart(2, '0');
-                const on = parseInt(celdaPort.querySelector('.label-green')?.innerText) || 0;
+                const on  = parseInt(celdaPort.querySelector('.label-green')?.innerText)  || 0;
                 const off = parseInt(celdaPort.querySelector('.label-danger')?.innerText) || 0;
                 const total = on + off;
                 if (total === 0) continue;
 
                 const pDown = ((off / total) * 100).toFixed(1);
-                const pUp = ((on / total) * 100).toFixed(1);
+                const pUp   = ((on  / total) * 100).toFixed(1);
                 const idNodo = `${oltName}${slotStr}${portStr}A`;
                 const superaUmbral = umbralTipo === 'porcentaje' ? parseFloat(pDown) >= umbralValor : off >= umbralValor;
+
+                const info      = DB_NODOS[idNodo] || { op: "---", zona: "S/I" };
+                const datosNodo = { total, on, off, pDown, pUp, zona: info.zona, op: info.op };
+                const memPrevia = memoriaRedGlobal.get(idNodo);
+                const comoInicial = modoCargaInicial || !memPrevia;
 
                 const etiquetas = celdaPort.querySelectorAll('.gpon-util .label');
                 let labelPrincipal = null;
@@ -638,28 +677,33 @@
                 }
 
                 if (superaUmbral) {
-                    const info = DB_NODOS[idNodo] || { op: "---", zona: "S/I" };
-                    const datosNodo = { total, on, off, pDown, pUp, zona: info.zona, op: info.op };
-
                     if (!registroNodos.has(idNodo)) {
+                        const offPrev   = memPrevia ? memPrevia.off   : 0;
+                        const onPrev    = memPrevia ? memPrevia.on    : total;
+                        const pDownPrev = memPrevia ? memPrevia.pDown : '0';
                         registroNodos.set(idNodo, {
-                            origen: modoCargaInicial ? 'inicial' : 'nuevo',
-                            reconocido: modoCargaInicial,
-                            timestamp: Date.now(),
-                            offAnterior: off,
-                            pDownAnterior: pDown
+                            origen:        comoInicial ? 'inicial' : 'nuevo',
+                            reconocido:    comoInicial,
+                            timestamp:     Date.now(),
+                            offAnterior:   off,
+                            onAnterior:    on,
+                            pDownAnterior: pDown,
+                            totalAnterior: total
                         });
-                        if (modoCargaInicial) {
-                            registrarLog('inicial', idNodo, datosNodo);
+                        if (comoInicial) {
+                            registrarLog('inicial_alarma', idNodo, datosNodo);
                         } else {
                             hayNovedadesParaAlarma = true;
-                            registrarLog('nueva_alarma', idNodo, datosNodo);
+                            registrarLog('nueva_alarma', idNodo, { ...datosNodo, offPrev, onPrev, pDownPrev });
                         }
                     } else {
                         const data = registroNodos.get(idNodo);
                         if (off > data.offAnterior) {
-                            registrarLog('empeora', idNodo, { ...datosNodo, offAntes: data.offAnterior, pDownAntes: data.pDownAnterior });
-                            data.offAnterior = off; data.pDownAnterior = pDown;
+                            registrarLog('empeora', idNodo, { ...datosNodo, offAntes: data.offAnterior, onAntes: data.onAnterior, pDownAntes: data.pDownAnterior });
+                            data.offAnterior = off; data.onAnterior = on; data.pDownAnterior = pDown;
+                        } else if (off < data.offAnterior) {
+                            registrarLog('mejora', idNodo, { ...datosNodo, offAntes: data.offAnterior, onAntes: data.onAnterior, pDownAntes: data.pDownAnterior });
+                            data.offAnterior = off; data.onAnterior = on; data.pDownAnterior = pDown;
                         }
                     }
 
@@ -676,39 +720,40 @@
                     criticosActuales.push({ id: idNodo, down: pDown, off, total, ...info, esNuevoParaPanel });
 
                 } else {
-                    // --- DETECCIÓN DE RECUPERACIÓN ---
                     if (registroNodos.has(idNodo)) {
                         const data = registroNodos.get(idNodo);
                         if (!modoCargaInicial) {
-                            const info = DB_NODOS[idNodo] || { op: "---", zona: "S/I" };
                             registrarLog('recuperado', idNodo, {
-                                offAntes: data.offAnterior,
-                                pDownAntes: data.pDownAnterior,
-                                offActual: off,
-                                pDownActual: pDown,
-                                total: total,
-                                zona: info.zona,
-                                op: info.op
+                                offAntes: data.offAnterior, onAntes: data.onAnterior, pDownAntes: data.pDownAnterior,
+                                offActual: off, onActual: on, pDownActual: pDown,
+                                total, zona: info.zona, op: info.op
                             });
                         }
                         registroNodos.delete(idNodo);
                     }
-
                     if (labelPrincipal) {
                         labelPrincipal.className = "label";
                         labelPrincipal.style.cssText = `display:inline-block!important;width:68px!important;background-color:#1ab394!important;color:white!important;border-radius:4px;text-align:center;`;
                     }
                 }
+
+                memoriaRedGlobal.set(idNodo, { off, on, total, pDown });
             }
         });
 
         if (hayNovedadesParaAlarma && !silenciado && !muteGlobal) sonidoAlerta.play().catch(() => {});
         if (!enPrueba && criticosActuales.length === 0) detenerSonido();
 
-        // Limpieza de nodos que desaparecen por completo de la tabla (Garbage Collection silente)
         const idsActivos = new Set(criticosActuales.map(c => c.id));
-        for (let id of registroNodos.keys()) {
+        for (let [id, data] of registroNodos.entries()) {
             if (!idsActivos.has(id)) {
+                if (!modoCargaInicial) {
+                    registrarLog('recuperado', id, {
+                        offAntes: data.offAnterior, onAntes: data.onAnterior, pDownAntes: data.pDownAnterior,
+                        offActual: 0, onActual: 0, pDownActual: '0',
+                        total: data.totalAnterior, zona: '', op: ''
+                    });
+                }
                 registroNodos.delete(id);
             }
         }
@@ -732,8 +777,8 @@
         }
 
         const criticosFiltrados = filtroOp === 'TODOS' ? criticosActuales : criticosActuales.filter(c => c.op === filtroOp);
-        const badgeContador = document.getElementById('alert-count');
-        const btnMarcar = document.getElementById('btn-marcar-todos');
+        const badgeContador  = document.getElementById('alert-count');
+        const btnMarcar      = document.getElementById('btn-marcar-todos');
         const hayAlgoSinLeer = criticosActuales.some(c => c.esNuevoParaPanel);
 
         badgeContador.innerText = criticosActuales.length;
@@ -758,7 +803,6 @@
                     ? `<div style="color:#aaa;text-align:center;padding:20px;font-size:11px;">Sin alarmas para <b>${filtroOp}</b></div>`
                     : '<div style="color:#1ab394;text-align:center;padding:20px;font-weight:bold;">SISTEMA OK ✅</div>';
 
-            // Comprobación de estado en memoria antes de afectar el DOM
             if (ultimoHTMLRenderizado !== nuevoHTML) {
                 listContainer.innerHTML = nuevoHTML;
                 ultimoHTMLRenderizado = nuevoHTML;
@@ -768,10 +812,14 @@
         actualizarPestana(oltActual, criticosActuales.length, hayAlgoSinLeer);
     }
 
+    // =========================================================
+    // WORKER
+    // =========================================================
     const workerBlobUrl = URL.createObjectURL(
         new Blob([`setInterval(()=>postMessage('tick'),2500)`], { type: 'application/javascript' })
     );
     const worker = new Worker(workerBlobUrl);
     URL.revokeObjectURL(workerBlobUrl);
     worker.onmessage = procesarNodos;
+
 })();
