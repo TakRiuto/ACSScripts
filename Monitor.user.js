@@ -2,7 +2,7 @@
 // @name         OLT Monitor Maestro
 // @namespace    Violentmonkey Scripts
 // @match        *://190.153.58.82/monitoring/olt/*
-// @version      15.3
+// @version      15.4
 // @inject-into  content
 // @run-at       document-end
 // @author       Ing. Adrian Leon
@@ -97,7 +97,7 @@
             if (e.tipo === 'inicial') lineas.push(`${base} | INICIO    | Total:${e.datos.total} ON:${e.datos.on} OFF:${e.datos.off} (${e.datos.pDown}% caída)`);
             if (e.tipo === 'nueva_alarma') lineas.push(`${base} | ALARMA    | Total:${e.datos.total} ON:${e.datos.on} OFF:${e.datos.off} (${e.datos.pDown}% caída)`);
             if (e.tipo === 'empeora') lineas.push(`${base} | EMPEORA   | OFF:${e.datos.offAntes}→${e.datos.off} (${e.datos.pDownAntes}%→${e.datos.pDown}%)`);
-            if (e.tipo === 'recuperado') lineas.push(`${base} | RECUPERADO| Estaba OFF:${e.datos.off} (${e.datos.pDown}%)`);
+            if (e.tipo === 'recuperado') lineas.push(`${base} | RECUPERADO| OFF:${e.datos.offAntes}→${e.datos.offActual} (${e.datos.pDownAntes}%→${e.datos.pDownActual}%)`);
         });
         const blob = new Blob([lineas.join('\n')], { type: 'text/plain' });
         const a = document.createElement('a');
@@ -121,7 +121,7 @@
             } else if (e.tipo === 'empeora') {
                 caidos = e.datos.off ?? ''; caidosAntes = e.datos.offAntes ?? ''; totales = e.datos.total ?? ''; porcCaida = e.datos.pDown != null ? `${e.datos.pDown}%` : '';
             } else if (e.tipo === 'recuperado') {
-                caidos = e.datos.off ?? ''; porcCaida = e.datos.pDown != null ? `${e.datos.pDown}%` : '';
+                caidos = e.datos.offActual ?? ''; caidosAntes = e.datos.offAntes ?? ''; totales = e.datos.total ?? ''; porcCaida = e.datos.pDownActual != null ? `${e.datos.pDownActual}%` : '';
             }
             const esc = v => `"${String(v).replace(/"/g, '""')}"`;
             return [esc(fecha), esc(hora), esc(oltActual), esc(e.nodo), esc(zona), esc(op), esc(estatus), esc(caidos), esc(caidosAntes), esc(totales), esc(porcCaida)].join(',');
@@ -156,7 +156,7 @@
             let detalle = '';
             if (e.tipo === 'inicial' || e.tipo === 'nueva_alarma') detalle = `Total:${e.datos.total} ON:${e.datos.on} OFF:${e.datos.off} <b>${e.datos.pDown}%↓</b>`;
             if (e.tipo === 'empeora') detalle = `OFF: ${e.datos.offAntes}→<b>${e.datos.off}</b> | ${e.datos.pDownAntes}%→<b>${e.datos.pDown}%</b>`;
-            if (e.tipo === 'recuperado') detalle = `Estaba OFF:${e.datos.off} (${e.datos.pDown}%)`;
+            if (e.tipo === 'recuperado') detalle = `OFF: ${e.datos.offAntes}→<b>${e.datos.offActual}</b> | ${e.datos.pDownAntes}%→<b>${e.datos.pDownActual}%</b>`;
             const zona = e.datos.zona || '';
             const op = e.datos.op || '';
             return `
@@ -573,32 +573,32 @@
 
         const filas = document.querySelectorAll('tr');
 
-                // --- VALIDACIÓN DE CARGA AJAX ---
-                let tablaCargada = false;
-                for (let fila of filas) {
-                    const celdas = fila.querySelectorAll('td');
-                    if (celdas.length >= 2) {
-                        const slotStr = celdas[0].querySelector('strong')?.innerText.trim();
-                        if (slotStr && /^\d+$/.test(slotStr)) {
-                            tablaCargada = true;
-                            break;
-                        }
-                    }
+        // --- VALIDACIÓN DE CARGA AJAX ---
+        let tablaCargada = false;
+        for (let fila of filas) {
+            const celdas = fila.querySelectorAll('td');
+            if (celdas.length >= 2) {
+                const slotStr = celdas[0].querySelector('strong')?.innerText.trim();
+                if (slotStr && /^\d+$/.test(slotStr)) {
+                    tablaCargada = true;
+                    break;
                 }
+            }
+        }
 
-                if (!tablaCargada) {
-                    const listContainer = document.getElementById('alert-list');
-                    const msgCarga = '<div style="color:#aaa;text-align:center;padding:20px;font-size:11px;">⏳ Esperando datos...</div>';
-                    if (listContainer && ultimoHTMLRenderizado !== msgCarga) {
-                        listContainer.innerHTML = msgCarga;
-                        ultimoHTMLRenderizado = msgCarga;
-                        document.title = `⏳ Cargando ${oltActual}...`;
-                    }
-                    return;
-                }
+        if (!tablaCargada) {
+            const listContainer = document.getElementById('alert-list');
+            const msgCarga = '<div style="color:#aaa;text-align:center;padding:20px;font-size:11px;">⏳ Esperando datos...</div>';
+            if (listContainer && ultimoHTMLRenderizado !== msgCarga) {
+                listContainer.innerHTML = msgCarga;
+                ultimoHTMLRenderizado = msgCarga;
+                document.title = `⏳ Cargando ${oltActual}...`;
+            }
+            return;
+        }
 
-                const criticosActuales = [];
-                let hayNovedadesParaAlarma = false;
+        const criticosActuales = [];
+        let hayNovedadesParaAlarma = false;
 
         filas.forEach(fila => {
             const celdas = fila.querySelectorAll('td');
@@ -675,9 +675,29 @@
 
                     criticosActuales.push({ id: idNodo, down: pDown, off, total, ...info, esNuevoParaPanel });
 
-                } else if (labelPrincipal) {
-                    labelPrincipal.className = "label";
-                    labelPrincipal.style.cssText = `display:inline-block!important;width:68px!important;background-color:#1ab394!important;color:white!important;border-radius:4px;text-align:center;`;
+                } else {
+                    // --- DETECCIÓN DE RECUPERACIÓN ---
+                    if (registroNodos.has(idNodo)) {
+                        const data = registroNodos.get(idNodo);
+                        if (!modoCargaInicial) {
+                            const info = DB_NODOS[idNodo] || { op: "---", zona: "S/I" };
+                            registrarLog('recuperado', idNodo, {
+                                offAntes: data.offAnterior,
+                                pDownAntes: data.pDownAnterior,
+                                offActual: off,
+                                pDownActual: pDown,
+                                total: total,
+                                zona: info.zona,
+                                op: info.op
+                            });
+                        }
+                        registroNodos.delete(idNodo);
+                    }
+
+                    if (labelPrincipal) {
+                        labelPrincipal.className = "label";
+                        labelPrincipal.style.cssText = `display:inline-block!important;width:68px!important;background-color:#1ab394!important;color:white!important;border-radius:4px;text-align:center;`;
+                    }
                 }
             }
         });
@@ -685,10 +705,10 @@
         if (hayNovedadesParaAlarma && !silenciado && !muteGlobal) sonidoAlerta.play().catch(() => {});
         if (!enPrueba && criticosActuales.length === 0) detenerSonido();
 
+        // Limpieza de nodos que desaparecen por completo de la tabla (Garbage Collection silente)
         const idsActivos = new Set(criticosActuales.map(c => c.id));
-        for (let [id, data] of registroNodos.entries()) {
+        for (let id of registroNodos.keys()) {
             if (!idsActivos.has(id)) {
-                if (!modoCargaInicial) registrarLog('recuperado', id, { off: data.offAnterior, pDown: data.pDownAnterior });
                 registroNodos.delete(id);
             }
         }
