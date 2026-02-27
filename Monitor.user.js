@@ -325,7 +325,7 @@
                                 <option value="chevette99">⚡ Chevette 99</option>
                             </select>
                             <button id="btn-test-play" class="ctrl" style="width:32px;color:#1ab394;" title="Probar sonido">▶</button>
-                            <button id="btn-test-stop" class="ctrl" style="width:32px;color:#ed5565;" title="Detener prueba">■</button>
+                            <button id="btn-test-stop" class="ctrl" style="width:32px;color:#ed5565;" title="Detener prueba">⏹️</button>
                         </div>
                         <div style="display:flex;gap:5px;">
                             <select id="umbral-tipo" class="ctrl" style="flex:1;">
