@@ -2,7 +2,7 @@
 // @name         OLT Monitor Maestro
 // @namespace    Violentmonkey Scripts
 // @match        *://190.153.58.82/monitoring/olt/*
-// @version      16.4
+// @version      16.5
 // @inject-into  content
 // @run-at       document-end
 // @author       Ing. Adrian Leon
@@ -528,25 +528,32 @@
         document.getElementById('btn-silenciar').addEventListener('click', () => {
             clicksRapidos++;
             clearTimeout(timerClickReset);
-            timerClickReset = setTimeout(() => { clicksRapidos = 0; }, 3000);
+            timerClickReset = setTimeout(() => { clicksRapidos = 0; }, 10000);
+
             if (clicksRapidos >= 10) {
-                clicksRapidos = 0; clearTimeout(timerMuteTemporal); muteExpiraEn = null;
-                muteGlobal = true; silenciado = true; localStorage.setItem('oltMuteGlobal', 'true');
-                enPrueba = false; detenerSonido(); aplicarMuteEstado(); return;
+                clicksRapidos = 0;
+                clearTimeout(timerMuteTemporal);
+                muteExpiraEn = null;
+                muteGlobal = !muteGlobal;
+                silenciado = muteGlobal;
+                localStorage.setItem('oltMuteGlobal', muteGlobal);
+                enPrueba = false;
+                detenerSonido();
+                aplicarMuteEstado();
+                return;
             }
+
             if (muteGlobal) {
-                clicksRapidos = 0; muteGlobal = false; silenciado = false; muteExpiraEn = null;
+                muteGlobal = false; silenciado = false; muteExpiraEn = null;
                 localStorage.setItem('oltMuteGlobal', 'false'); aplicarMuteEstado(); return;
             }
             if (silenciado && muteExpiraEn) {
-                clicksRapidos = 0;
                 clearTimeout(timerMuteTemporal); timerMuteTemporal = null;
                 silenciado = false; muteExpiraEn = null; aplicarMuteEstado(); return;
             }
             const DURACION_MS = 60 * 60 * 1000;
-            muteExpiraEn = Date.now() + DURACION_MS;
-            clicksRapidos = 0;
-            silenciado = true; enPrueba = false; detenerSonido();
+            muteExpiraEn = Date.now() + DURACION_MS; silenciado = true;
+            enPrueba = false; detenerSonido();
             clearTimeout(timerMuteTemporal);
             timerMuteTemporal = setTimeout(() => { silenciado = false; muteExpiraEn = null; aplicarMuteEstado(); }, DURACION_MS);
             aplicarMuteEstado();
