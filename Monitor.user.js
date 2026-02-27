@@ -2,7 +2,7 @@
 // @name         OLT Monitor Maestro
 // @namespace    Violentmonkey Scripts
 // @match        *://190.153.58.82/monitoring/olt/*
-// @version      16.3
+// @version      16.4
 // @inject-into  content
 // @run-at       document-end
 // @author       Ing. Adrian Leon
@@ -215,7 +215,7 @@
         if (ultimoEstadoPestana.criticos === totalCriticos && ultimoEstadoPestana.hayNuevos === hayNuevos) return;
         ultimoEstadoPestana.criticos = totalCriticos;
         ultimoEstadoPestana.hayNuevos = hayNuevos;
-        document.title = totalCriticos > 0 ? `${hayNuevos ? '🆕' : '🔴'} (${totalCriticos}) ${oltName}` : `✅ ${oltName}`;
+        document.title = totalCriticos > 0 ? `${hayNuevos ? '🆕' : ''} ${oltName}` : `✅ ${oltName}`;
         const color = totalCriticos > 0 ? (hayNuevos ? '#e74c3c' : '#a93226') : '#1ab394';
         faviconCtx.clearRect(0, 0, 32, 32);
         faviconCtx.beginPath();
@@ -226,8 +226,7 @@
         faviconCtx.textAlign = 'center';
         faviconCtx.textBaseline = 'middle';
         if (totalCriticos > 0) {
-            faviconCtx.font = `bold ${totalCriticos > 9 ? '14' : '18'}px sans-serif`;
-            faviconCtx.fillText(totalCriticos > 99 ? '99+' : totalCriticos, 16, 17);
+            document.title = `(${totalCriticos}) ${oltName}`;
         } else {
             faviconCtx.font = 'bold 20px sans-serif';
             faviconCtx.fillText('✓', 16, 17);
@@ -775,17 +774,19 @@
         const listContainer = document.getElementById('alert-list');
         if (listContainer) {
             const nuevoHTML = criticosFiltrados.length > 0
-                ? criticosFiltrados.map(c => `
-                    <div class="${c.esNuevoParaPanel ? 'tarjeta-panel-blink' : ''}" style="margin-bottom:10px;padding:9px;border-left:5px solid #ed5565;background:rgba(255,255,255,0.05);border-radius:0 5px 5px 0;">
-                        <div style="display:flex;align-items:center;justify-content:space-between;">
-                            <span style="color:#1ab394;font-weight:900;font-size:14px;letter-spacing:0.5px;">${c.id}</span>
-                            ${c.esNuevoParaPanel ? '<span class="badge-nuevo">NUEVO</span>' : ''}
-                        </div>
-                        <div style="font-size:10px;color:#ddd;margin:3px 0;">📍 ${c.zona} | 🏢 ${c.op}</div>
-                        <div style="margin-top:5px;color:#ed5565;font-size:11px;font-weight:bold;">
-                            ⚠️ ${c.down}% caída | 🔴 OFF:${c.off} | 👥 ${c.total}
-                        </div>
-                    </div>`).join('')
+                ? criticosFiltrados
+                    .sort((a, b) => (a.esNuevoParaPanel === b.esNuevoParaPanel) ? 0 : a.esNuevoParaPanel ? -1 : 1)
+                    .map(c => `
+                        <div class="${c.esNuevoParaPanel ? 'tarjeta-panel-blink' : ''}" style="margin-bottom:10px;padding:9px;border-left:5px solid ${c.esNuevoParaPanel ? '#ed5565' : '#a93226'};background:rgba(255,255,255,0.05);border-radius:0 5px 5px 0;">
+                            <div style="display:flex;align-items:center;justify-content:space-between;">
+                                <span style="color:#1ab394;font-weight:900;font-size:14px;letter-spacing:0.5px;">${c.id}</span>
+                                ${c.esNuevoParaPanel ? '<span class="badge-nuevo">NUEVO</span>' : ''}
+                            </div>
+                            <div style="font-size:10px;color:#ddd;margin:3px 0;">📍 ${c.zona} | 🏢 ${c.op}</div>
+                            <div style="margin-top:5px;color:#ed5565;font-size:11px;font-weight:bold;">
+                                ⚠️ ${c.down}% caída | 🔴 OFF:${c.off} | 👥 ${c.total}
+                            </div>
+                        </div>`).join('')
                 : criticosActuales.length > 0
                     ? `<div style="color:#aaa;text-align:center;padding:20px;font-size:11px;">Sin alarmas para <b>${filtroOp}</b></div>`
                     : '<div style="color:#1ab394;text-align:center;padding:20px;font-weight:bold;">SISTEMA OK ✅</div>';
