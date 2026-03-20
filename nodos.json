@@ -2210,5 +2210,6 @@
         "TURHUB21000A": { "op": "Turmero", "zona": "Geriatrico"},
         "TURHUB21001A": { "op": "Turmero", "zona": "Geriatrico"},
         "TURHUB21002A": { "op": "Turmero", "zona": "Geriatrico"},
-        "TURHUB21003A": { "op": "Turmero", "zona": "Zona Industrial Santa Rosalia"}
+        "TURHUB21003A": { "op": "Turmero", "zona": "Zona Industrial Santa Rosalia"},
+        "CTVHUB00115A": { "op": "La Victoria", "zona": "Hub-Site CTV"}
 }
