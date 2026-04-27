@@ -2,7 +2,7 @@
 // @name         OLT Monitor Maestro
 // @namespace    Violentmonkey Scripts
 // @match        *://190.153.58.82/monitoring/olt/*
-// @version      16.5
+// @version      16.6
 // @inject-into  content
 // @run-at       document-end
 // @author       Ing. Adrian Leon
@@ -37,6 +37,170 @@
     // =========================================================
     // ESTADO
     // =========================================================
+    const resultadosRCA = new Map();
+    const CAUSAS_CONOCIDAS = {
+        'dying-gasp': { titulo: 'Pérdida de alimentación eléctrica', icono: '⚡' },
+        'LOS': { titulo: 'Loss of Signal — Pérdida de señal óptica', icono: '🔴' },
+        'LOSi': { titulo: 'Loss of Signal — Pérdida de señal óptica (intermitente)', icono: '🟡' },
+        'power-off': { titulo: 'Apagado de equipo', icono: '🔌' },
+        'link-down': { titulo: 'Enlace caído', icono: '🔗' },
+        'deactive': { titulo: 'Falso positivo (deuda/desconexión adm.)', icono: '💡' },
+        'LOFi': { titulo: 'Loss of Frame — Pérdida de trama', icono: '🔗' },
+        'SUSPENDED': { titulo: 'Suspendido (Admin)', icono: '🚫' },
+        'OTHER': { titulo: 'Falla Desconocida', icono: '❓' }
+    };
+
+    function _oltNormCausa(raw) {
+        if (!raw || raw === "-") return null;
+        const k = raw.trim();
+        if (k === "LOBi" || k === "LOSi/LOBi" || k === "LOBi/LOSi" || k.includes("LOSi")) return "LOSi";
+        if (k.toUpperCase() === "LOFI") return "LOFi";
+        return k;
+    }
+
+    function obtenerTokenAcs() {
+        const storages = [localStorage, sessionStorage];
+        for (let storage of storages) {
+            for (let i = 0; i < storage.length; i++) {
+                let key = storage.key(i);
+                let val = storage.getItem(key);
+                if (!val) continue;
+
+                // Si es un JWT puro en el storage
+                if (val.startsWith('eyJ') && val.split('.').length >= 3) return val;
+
+                // Si está dentro de un JSON (ngStorage, redux, etc.)
+                if (val.includes('eyJ')) {
+                    try {
+                        let parsed = JSON.parse(val);
+                        // Exploración profunda para encontrar cualquier string JWT
+                        const traverse = (obj) => {
+                            for (let k in obj) {
+                                if (typeof obj[k] === 'string' && obj[k].startsWith('eyJ') && obj[k].split('.').length >= 3) {
+                                    return obj[k];
+                                } else if (typeof obj[k] === 'object' && obj[k] !== null) {
+                                    const found = traverse(obj[k]);
+                                    if (found) return found;
+                                }
+                            }
+                            return null;
+                        };
+                        const found = traverse(parsed);
+                        if (found) return found;
+                    } catch(e) {}
+                }
+            }
+        }
+
+        // Buscar en cookies por si acaso
+        const cookies = document.cookie.split(';');
+        for (let c of cookies) {
+            let val = c.trim().split('=')[1];
+            if (val && val.startsWith('eyJ') && val.split('.').length >= 3) return val;
+        }
+
+        return '';
+    }
+
+    async function ejecutarRCA(idNodo, oltId, slotId, portId) {
+        if (!oltId) return;
+        const token = obtenerTokenAcs();
+
+        resultadosRCA.set(idNodo, { status: 'loading', text: '⏳ Analizando causa raíz...', ts: Date.now() });
+
+        if (!token) {
+            resultadosRCA.set(idNodo, { status: 'error', text: '🔑 Sin Token de Auth para RCA', ts: Date.now() });
+            return;
+        }
+
+        try {
+            const filterObj = {
+                "skip": 0, "limit": 100,
+                "where": {"and": [{"slotId": slotId.toString()}, {"portId": portId.toString()}, {"generalStatus": "OFFLINE"}]}
+            };
+            const filter = encodeURIComponent(JSON.stringify(filterObj));
+            const url = `https://${window.location.host}/api/fttx/olts/${oltId}/active-devices?filter=${filter}`;
+
+            const res = await fetch(url, {
+                headers: {
+                    "accept": "application/json",
+                    "x-access-token": token
+                }
+            });
+
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            const data = await res.json();
+
+            if (!Array.isArray(data) || data.length === 0) {
+                resultadosRCA.set(idNodo, { status: 'done', text: '🦕 Sin reporte de falla en OLT', ts: Date.now() });
+                return;
+            }
+
+            const causasCount = {};
+            let validCount = 0;
+
+            data.forEach(ont => {
+                let causa = (ont.lastDownCause && ont.lastDownCause.trim() !== '-') ? ont.lastDownCause.trim() : null;
+
+                causa = _oltNormCausa(causa);
+
+                if (causa) {
+                    causasCount[causa] = (causasCount[causa] || 0) + 1;
+                    validCount++;
+                }
+            });
+
+            if (validCount === 0) {
+                resultadosRCA.set(idNodo, { status: 'done', text: '🦕 Caída sin diagnóstico', ts: Date.now() });
+                return;
+            }
+
+            let dominante = null;
+            let max = 0;
+            for (const [c, cnt] of Object.entries(causasCount)) {
+                if (cnt > max) { max = cnt; dominante = c; }
+            }
+
+            const pct = Math.round((max / validCount) * 100);
+            const info = CAUSAS_CONOCIDAS[dominante] || { titulo: dominante, icono: '⚠️' };
+
+            let desglose = "";
+            if (Object.keys(causasCount).length > 1) {
+                const porcentajes = {};
+                const restos = [];
+                let suma = 0;
+                for (const [mot, cnt] of Object.entries(causasCount)) {
+                    const pctExacto = (cnt / validCount) * 100;
+                    const pctEntero = Math.floor(pctExacto);
+                    porcentajes[mot] = pctEntero;
+                    suma += pctEntero;
+                    restos.push({ mot, resto: pctExacto - pctEntero });
+                }
+                restos.sort((a, b) => b.resto - a.resto);
+                let faltante = 100 - suma;
+                for (let i = 0; i < faltante; i++) {
+                    porcentajes[restos[i].mot]++;
+                }
+                const partes = [];
+                for (const [mot, pctVal] of Object.entries(porcentajes)) {
+                    if (pctVal > 0) partes.push(`${mot}: ${pctVal}%`);
+                }
+                desglose = partes.join(" · ");
+            }
+
+            resultadosRCA.set(idNodo, {
+                status: 'done',
+                dominante: dominante,
+                text: `${info.icono} RCA: ${info.titulo} (${pct}%)${desglose ? ` <br><span style="font-size:9px;color:#ccc;display:block;margin-top:2px;">[ ${desglose} ]</span>` : ''}`,
+                ts: Date.now()
+            });
+
+        } catch (e) {
+            console.error("Error en RCA para", idNodo, e);
+            resultadosRCA.set(idNodo, { status: 'error', text: '❌ Falla comunicación RCA', ts: Date.now() });
+        }
+    }
+
     let oltActual = "";
     let modoCargaInicial = true;
     let umbralValor = parseFloat(localStorage.getItem('oltUmbralValor')) || 30;
@@ -671,6 +835,10 @@
                 const memPrevia = memoriaRedGlobal.get(idNodo);
                 const comoInicial = modoCargaInicial || !memPrevia;
 
+                if (!comoInicial && memPrevia && (memPrevia.off !== off || memPrevia.on !== on)) {
+                    resultadosRCA.delete(idNodo);
+                }
+
                 const etiquetas = celdaPort.querySelectorAll('.gpon-util .label');
                 let labelPrincipal = null;
                 if (etiquetas.length > 0) {
@@ -682,24 +850,39 @@
                 }
 
                 if (superaUmbral) {
+                    const rcaState = resultadosRCA.get(idNodo);
+                    if (!rcaState || (rcaState.status === 'error' && (Date.now() - rcaState.ts) > 30000)) {
+                        const matchOlt = window.location.pathname.match(/\/olt\/(\d+)/);
+                        if (matchOlt) {
+                            // Ejecutar RCA en background sin bloquear iteración
+                            ejecutarRCA(idNodo, matchOlt[1], parseInt(slotStr, 10), parseInt(portStr, 10));
+                        }
+                    }
+
+                    const RCA_VALIDAS = ['LOS', 'LOSi', 'LOFi', 'link-down'];
+                    const rcaPendiente = !rcaState || rcaState.status === 'loading';
+                    const rcaValido = rcaState && rcaState.status === 'done' && RCA_VALIDAS.includes(rcaState.dominante);
+                    const rcaIgnorado = rcaState && rcaState.status === 'done' && !rcaValido;
+
                     if (!registroNodos.has(idNodo)) {
                         const offPrev   = memPrevia ? memPrevia.off   : 0;
                         const onPrev    = memPrevia ? memPrevia.on    : total;
                         const pDownPrev = memPrevia ? memPrevia.pDown : '0';
+
                         registroNodos.set(idNodo, {
                             origen:        comoInicial ? 'inicial' : 'nuevo',
-                            reconocido:    comoInicial,
+                            reconocido:    comoInicial || rcaIgnorado, // Ignorados no titilan
+                            notificado:    false, // ¿Ya se alertó al log y con sonido?
                             timestamp:     Date.now(),
                             offAnterior:   off,
                             onAnterior:    on,
                             pDownAnterior: pDown,
                             totalAnterior: total
                         });
+
                         if (comoInicial) {
                             registrarLog('inicial', idNodo, datosNodo);
-                        } else {
-                            hayNovedadesParaAlarma = true;
-                            registrarLog('nueva_alarma', idNodo, { ...datosNodo, offPrev, onPrev, pDownPrev });
+                            registroNodos.get(idNodo).notificado = true;
                         }
                     } else {
                         const data = registroNodos.get(idNodo);
@@ -713,18 +896,41 @@
                     }
 
                     const data = registroNodos.get(idNodo);
-                    const esNuevoParaPanel = (data.origen === 'nuevo' && !data.reconocido);
 
-                    if (labelPrincipal) {
-                        labelPrincipal.className = esNuevoParaPanel ? "label celda-acs-blink" : "label";
-                        labelPrincipal.style.cssText = esNuevoParaPanel
-                            ? `display:inline-block!important;width:68px!important;color:white!important;border-radius:4px;text-align:center;`
-                            : `display:inline-block!important;width:68px!important;background-color:#a93226!important;color:white!important;border-radius:4px;text-align:center;border:1px solid rgba(255,255,255,0.05);`;
+                    // Disparar alarma solo cuando el RCA confirma que es válido (y no ha sido notificado)
+                    if (rcaValido && !data.notificado && !comoInicial && data.origen === 'nuevo') {
+                        data.notificado = true;
+                        hayNovedadesParaAlarma = true;
+                        const prev = memoriaRedGlobal.get(idNodo) || {};
+                        registrarLog('nueva_alarma', idNodo, { ...datosNodo, offPrev: prev.off, onPrev: prev.on, pDownPrev: prev.pDown });
                     }
 
-                    criticosActuales.push({ id: idNodo, down: pDown, off, total, ...info, esNuevoParaPanel });
+                    if (rcaIgnorado) {
+                        data.reconocido = true; // Silenciar visualmente
+                    }
+
+                    const esNuevoParaPanel = (data.origen === 'nuevo' && !data.reconocido && rcaValido);
+
+                    if (labelPrincipal) {
+                        if (rcaIgnorado) {
+                            labelPrincipal.className = "label";
+                            labelPrincipal.style.cssText = `display:inline-block!important;width:68px!important;background-color:#7f8c8d!important;color:white!important;border-radius:4px;text-align:center;border:1px solid rgba(255,255,255,0.05);`;
+                        } else if (rcaPendiente) {
+                            labelPrincipal.className = "label";
+                            labelPrincipal.style.cssText = `display:inline-block!important;width:68px!important;background-color:#e67e22!important;color:white!important;border-radius:4px;text-align:center;border:1px solid rgba(255,255,255,0.05);`;
+                        } else {
+                            labelPrincipal.className = esNuevoParaPanel ? "label celda-acs-blink" : "label";
+                            labelPrincipal.style.cssText = esNuevoParaPanel
+                                ? `display:inline-block!important;width:68px!important;color:white!important;border-radius:4px;text-align:center;`
+                                : `display:inline-block!important;width:68px!important;background-color:#a93226!important;color:white!important;border-radius:4px;text-align:center;border:1px solid rgba(255,255,255,0.05);`;
+                        }
+                    }
+
+                    const borderColor = rcaIgnorado ? '#7f8c8d' : (rcaPendiente ? '#e67e22' : '#a93226');
+                    criticosActuales.push({ id: idNodo, down: pDown, off, total, ...info, esNuevoParaPanel, borderColor });
 
                 } else {
+                    resultadosRCA.delete(idNodo);
                     if (registroNodos.has(idNodo)) {
                         const data = registroNodos.get(idNodo);
                         if (!modoCargaInicial) {
@@ -782,9 +988,26 @@
         if (listContainer) {
             const nuevoHTML = criticosFiltrados.length > 0
                 ? criticosFiltrados
-                    .sort((a, b) => (a.esNuevoParaPanel === b.esNuevoParaPanel) ? 0 : a.esNuevoParaPanel ? -1 : 1)
+                    .sort((a, b) => {
+                        if (a.esNuevoParaPanel !== b.esNuevoParaPanel) return a.esNuevoParaPanel ? -1 : 1;
+
+                        function getPrio(id) {
+                            const dom = resultadosRCA.get(id)?.dominante;
+                            if (!dom) return 2; // Pendiente/Inconcluso/OTHER
+                            if (['LOS', 'LOSi', 'LOFi', 'link-down'].includes(dom)) return 1;
+                            if (['dying-gasp', 'power-off'].includes(dom)) return 3;
+                            if (['deactive', 'SUSPENDED'].includes(dom)) return 4;
+                            return 2;
+                        }
+
+                        const prioA = getPrio(a.id);
+                        const prioB = getPrio(b.id);
+
+                        if (prioA !== prioB) return prioA - prioB;
+                        return b.down - a.down;
+                    })
                     .map(c => `
-                        <div class="${c.esNuevoParaPanel ? 'tarjeta-panel-blink' : ''}" style="margin-bottom:10px;padding:9px;border-left:5px solid ${c.esNuevoParaPanel ? '#ed5565' : '#a93226'};background:rgba(255,255,255,0.05);border-radius:0 5px 5px 0;">
+                        <div class="${c.esNuevoParaPanel ? 'tarjeta-panel-blink' : ''}" style="margin-bottom:10px;padding:9px;border-left:5px solid ${c.esNuevoParaPanel ? '#ed5565' : c.borderColor};background:rgba(255,255,255,0.05);border-radius:0 5px 5px 0;">
                             <div style="display:flex;align-items:center;justify-content:space-between;">
                                 <span style="color:#1ab394;font-weight:900;font-size:14px;letter-spacing:0.5px;">${c.id}</span>
                                 ${c.esNuevoParaPanel ? '<span class="badge-nuevo">NUEVO</span>' : ''}
@@ -793,6 +1016,7 @@
                             <div style="margin-top:5px;color:#ed5565;font-size:11px;font-weight:bold;">
                                 ⚠️ ${c.down}% caída | 🔴 OFF:${c.off} | 👥 ${c.total}
                             </div>
+                            ${resultadosRCA.has(c.id) ? `<div style="margin-top:4px;font-size:11px;color:#f1c40f;background:rgba(0,0,0,0.2);padding:4px 6px;border-radius:4px;display:inline-block;letter-spacing:0.3px;">${resultadosRCA.get(c.id).text}</div>` : ''}
                         </div>`).join('')
                 : criticosActuales.length > 0
                     ? `<div style="color:#aaa;text-align:center;padding:20px;font-size:11px;">Sin alarmas para <b>${filtroOp}</b></div>`
