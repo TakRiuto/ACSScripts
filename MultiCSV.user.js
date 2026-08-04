@@ -11,7 +11,6 @@
 // ==/UserScript==
 
 (function() {
-  // 1. DICCIONARIO DE OLTs
   const TODAS_LAS_OLTS = {
     32: "MCYHUB0",
     33: "MCYHUB2",
@@ -31,7 +30,6 @@
     103: "ARGLAV2"
   };
 
-  // 2. INYECTAR CSS PROFESIONAL
   const style = document.createElement('style');
   style.textContent = `
     #fttx-extractor-panel {
@@ -89,7 +87,6 @@
   `;
   document.head.appendChild(style);
 
-  // 3. CREACIÓN DE LA INTERFAZ HTML
   const panel = document.createElement('div');
   panel.id = 'fttx-extractor-panel';
 
@@ -119,7 +116,6 @@
   `;
   document.body.appendChild(panel);
 
-  // 4. LÓGICA DE LA INTERFAZ
   const btnEjecutar = panel.querySelector('#btn-ejecutar');
   const statusText = panel.querySelector('#status-text');
   
@@ -135,7 +131,6 @@
     statusText.style.color = color;
   }
 
-  // 5. FUNCIONES DEL CORE (Token y CSV)
   function buscarTokenAutomatico() {
     const storages = [localStorage, sessionStorage];
     const regexJWT = /(eyJ[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+)/;
@@ -189,7 +184,6 @@
     return true;
   }
 
-  // 6. MOTOR DE EXTRACCIÓN
   btnEjecutar.addEventListener('click', async () => {
     const checkboxes = Array.from(panel.querySelectorAll('.olt-checkbox:checked'));
     if (checkboxes.length === 0) {
@@ -246,7 +240,6 @@
 
     if (isMerge) {
       actualizarStatus(`Procesando archivo final...`, "#fbbf24");
-      // Si se hace merge de varias, usa SuperMesh.csv, si es una sola, usa su nombre exacto.
       const nombreMerge = checkboxes.length === 1 ? `${checkboxes[0].getAttribute('data-name')}.csv` : `SuperMesh.csv`;
       const descargado = descargarComoCSV(datosMergeados, nombreMerge);
       if (!descargado) actualizarStatus("No se encontraron datos para generar el archivo.", "#fbbf24");
