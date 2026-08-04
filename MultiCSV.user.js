@@ -1,13 +1,13 @@
 // ==UserScript==
 // @name        Multi-ACS CSV
 // @namespace   Violentmonkey Scripts
-// @match       *://190.153.58.82/fttx/monitoring*
+// @match       *://190.153.58.82/monitoring*
 // @grant       none
-// @version     1
+// @version     1.2
 // @author      Ing. Adrian Leon
-// @updateURL    https://raw.githubusercontent.com/TakRiuto/ACSScripts/release/MultiCSV.user.js
-// @downloadURL  https://raw.githubusercontent.com/TakRiuto/ACSScripts/release/MultiCSV.user.js
-// @icon         https://avatars.githubusercontent.com/u/20828447?v=4
+// @updateURL   https://raw.githubusercontent.com/TakRiuto/ACSScripts/release/MultiCSV.user.js
+// @downloadURL https://raw.githubusercontent.com/TakRiuto/ACSScripts/release/MultiCSV.user.js
+// @icon        https://avatars.githubusercontent.com/u/20828447?v=4
 // ==/UserScript==
 
 (function() {
@@ -37,11 +37,35 @@
       background: #1e293b; color: #f8fafc; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
       border: 1px solid #334155; border-radius: 12px; padding: 20px;
       z-index: 999999; box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.5), 0 8px 10px -6px rgba(0, 0, 0, 0.3);
+      display: flex; flex-direction: column; transition: width 0.3s ease;
+    }
+    
+    /* --- Estilos de Cabecera y Minimizado --- */
+    .fttx-header {
+      display: flex; justify-content: space-between; align-items: center;
+      margin: 0 0 16px 0; border-bottom: 1px solid #334155; padding-bottom: 12px;
+    }
+    #fttx-extractor-panel.minimized {
+      width: 250px;
+    }
+    #fttx-extractor-panel.minimized .fttx-header {
+      margin: 0; border-bottom: none; padding-bottom: 0;
+    }
+    .fttx-btn-min {
+      background: none; border: none; color: #94a3b8; font-size: 20px;
+      cursor: pointer; padding: 0 4px; line-height: 1; transition: color 0.2s;
+    }
+    .fttx-btn-min:hover { color: #f8fafc; }
+    .fttx-content {
       display: flex; flex-direction: column;
     }
+    #fttx-extractor-panel.minimized .fttx-content {
+      display: none;
+    }
+    /* -------------------------------------- */
+
     #fttx-extractor-panel h3 {
-      margin: 0 0 16px 0; font-size: 15px; font-weight: 600; color: #e2e8f0;
-      border-bottom: 1px solid #334155; padding-bottom: 12px; letter-spacing: 0.5px;
+      margin: 0; font-size: 15px; font-weight: 600; color: #e2e8f0; letter-spacing: 0.5px;
     }
     .fttx-btn-group {
       display: flex; gap: 8px; margin-bottom: 12px;
@@ -101,24 +125,40 @@
   htmlOLTs += `</div>`;
 
   panel.innerHTML = `
-    <h3>Extracción de Datos ACS</h3>
-    <div class="fttx-btn-group">
-      <button id="btn-select-all" class="fttx-btn-small">Seleccionar Todo</button>
-      <button id="btn-select-none" class="fttx-btn-small">Limpiar</button>
+    <div class="fttx-header">
+      <h3>Extracción de Datos ACS</h3>
+      <button id="btn-minimize" class="fttx-btn-min" title="Minimizar/Maximizar">&minus;</button>
     </div>
-    ${htmlOLTs}
-    <label class="fttx-switch">
-      <input type="checkbox" id="chk-merge" checked> 
-      Unir todo en un archivo (Merge)
-    </label>
-    <button id="btn-ejecutar" class="fttx-btn-primary">INICIAR EXTRACCIÓN</button>
-    <div id="status-text" class="fttx-status">Listo para operar.</div>
+    <div class="fttx-content">
+      <div class="fttx-btn-group">
+        <button id="btn-select-all" class="fttx-btn-small">Seleccionar Todo</button>
+        <button id="btn-select-none" class="fttx-btn-small">Limpiar</button>
+      </div>
+      ${htmlOLTs}
+      <label class="fttx-switch">
+        <input type="checkbox" id="chk-merge" checked> 
+        Unir todo en un archivo (Merge)
+      </label>
+      <button id="btn-ejecutar" class="fttx-btn-primary">INICIAR EXTRACCIÓN</button>
+      <div id="status-text" class="fttx-status">Listo para operar.</div>
+    </div>
   `;
   document.body.appendChild(panel);
 
   const btnEjecutar = panel.querySelector('#btn-ejecutar');
   const statusText = panel.querySelector('#status-text');
+  const btnMinimize = panel.querySelector('#btn-minimize');
   
+  // --- Lógica de minimizar/maximizar ---
+  btnMinimize.addEventListener('click', () => {
+    panel.classList.toggle('minimized');
+    if (panel.classList.contains('minimized')) {
+      btnMinimize.innerHTML = '&#43;'; // Símbolo +
+    } else {
+      btnMinimize.innerHTML = '&minus;'; // Símbolo -
+    }
+  });
+
   panel.querySelector('#btn-select-all').addEventListener('click', () => {
     panel.querySelectorAll('.olt-checkbox').forEach(cb => cb.checked = true);
   });
