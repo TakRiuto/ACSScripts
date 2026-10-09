@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         InCa ACS - NOC Slot Outage Monitor
 // @namespace    Violentmonkey Scripts
-// @version      3.0
-// @description  Monitoreo en tiempo real de caídas a cero (online=0) con diseño NOC e invalidación reactiva de caché.
+// @version      3.1
+// @description  Monitoreo en tiempo real de caídas a cero (online=0).
 // @author       Ing. Adrian Leon
 // @updateURL    https://raw.githubusercontent.com/TakRiuto/ACSScripts/release/BoardDetector.user.js
 // @downloadURL  https://raw.githubusercontent.com/TakRiuto/ACSScripts/release/BoardDetector.user.js
@@ -259,7 +259,17 @@
         document.addEventListener('keydown', escListener);
     }
 
-    // Procesar caídas (1 evento consecutivo hasta que levanta)
+    // Verifica si un valor representa explícitamente "N/A", null o inválido
+    function isNaValue(val) {
+        if (val === null || val === undefined) return true;
+        if (typeof val === 'string') {
+            const clean = val.trim().toUpperCase();
+            if (clean === 'N/A' || clean === 'NA' || clean === '') return true;
+        }
+        return false;
+    }
+
+    // Procesar caídas (N/A no es 0. Solo cuenta caídas reales si hay ONTs en la tarjeta)
     function parseOutageEvents(data) {
         data.sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
         const events = [];
@@ -268,7 +278,24 @@
 
         for (let i = 0; i < data.length; i++) {
             const item = data[i];
-            if (item.online === 0) {
+
+            // 1. Descartar si el valor es N/A, null o indefinido
+            if (isNaValue(item.online)) {
+                continue;
+            }
+
+            const online = Number(item.online);
+            const offline = Number(item.offline) || 0;
+            const suspended = Number(item.suspended) || 0;
+            const totalOnus = online + offline + suspended;
+
+            // 2. Si el valor es inválido o la tarjeta no tiene equipos asignados (total 0 = tarjeta vacía/N/A)
+            if (isNaN(online) || totalOnus === 0) {
+                continue;
+            }
+
+            // 3. Caída real: online es exactamente 0 pero sí hay ONTs en la tarjeta
+            if (online === 0) {
                 if (!inOutage) {
                     inOutage = true;
                     outageStart = item.createdAt;
@@ -379,7 +406,6 @@
         if (timestampEl) {
             const currentTs = timestampEl.textContent.trim();
             if (lastTelemetryTimestamp && lastTelemetryTimestamp !== currentTs) {
-                // Se actualizó la data de la OLT: limpiamos caché para re-consultar
                 slotCache.clear();
                 document.querySelectorAll('.noc-slot-badge').forEach(b => b.remove());
             }
@@ -395,6 +421,10 @@
             const firstCell = row.querySelector('td:first-child');
             const totalCell = row.querySelector('td:last-child');
             if (!firstCell || !totalCell) return;
+
+            // Si el total dice "N/A", la tarjeta no está en servicio / no tiene equipos
+            const totalText = totalCell.textContent.trim().toUpperCase();
+            if (totalText.includes('N/A')) return;
 
             const slotText = firstCell.querySelector('.datatable-body-cell-label-inner')?.textContent?.trim()
                           || firstCell.textContent.trim();
