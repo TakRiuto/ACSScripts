@@ -14,7 +14,7 @@ Multiple tools for monitoring under InCa
 | **Multi ONT** | [![Install](https://img.shields.io/badge/Install-MultiONT-green?style=flat-square&logo=tampermonkey)](https://raw.githubusercontent.com/TakRiuto/ACSScripts/release/MultiONT.user.js) |
 | **Multi TODO** | [![Install](https://img.shields.io/badge/Install-MultiTODO-green?style=flat-square&logo=tampermonkey)](https://raw.githubusercontent.com/TakRiuto/ACSScripts/release/MultiTODO.user.js) |
 | **Multi CSV** | [![Install](https://img.shields.io/badge/Install-MultiCSV-green?style=flat-square&logo=tampermonkey)](https://raw.githubusercontent.com/TakRiuto/ACSScripts/release/MultiCSV.user.js) |
-| **Board Det.** | [![Install](https://img.shields.io/badge/Install-MultiCSV-green?style=flat-square&logo=tampermonkey)](https://raw.githubusercontent.com/TakRiuto/ACSScripts/release/BoardDetector.user.js) |
+| **Board Det.** | [![Install](https://img.shields.io/badge/Install-BoardDet.-green?style=flat-square&logo=tampermonkey)](https://raw.githubusercontent.com/TakRiuto/ACSScripts/release/BoardDetector.user.js) |
 
 3. Enable userscripts (Only if can't enable dev mode):
    - https://www.tampermonkey.net/faq.php?locale=en#Q209
