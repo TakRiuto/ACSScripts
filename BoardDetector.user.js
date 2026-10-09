@@ -1,9 +1,11 @@
 // ==UserScript==
-// @name         NOC Slot Outage Monitor
-// @namespace    http://tampermonkey.net/
+// @name         InCa ACS - NOC Slot Outage Monitor
 // @version      3.0
-// @description  Monitoreo en tiempo real de caídas a cero.
-// @author       Ing. Adrián León
+// @description  Monitoreo en tiempo real de caídas a cero (online=0) con diseño NOC e invalidación reactiva de caché.
+// @author       Ing. Adrian Leon
+// @updateURL    https://raw.githubusercontent.com/TakRiuto/ACSScripts/release/BoardDetector.user.js
+// @downloadURL  https://raw.githubusercontent.com/TakRiuto/ACSScripts/release/BoardDetector.user.js
+// @icon         https://avatars.githubusercontent.com/u/20828447?v=4
 // @match        https://190.153.58.82/monitoring/olt/*
 // @grant        none
 // ==/UserScript==
