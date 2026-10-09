@@ -1,5 +1,6 @@
 // ==UserScript==
 // @name         InCa ACS - NOC Slot Outage Monitor
+// @namespace    Violentmonkey Scripts
 // @version      3.0
 // @description  Monitoreo en tiempo real de caídas a cero (online=0) con diseño NOC e invalidación reactiva de caché.
 // @author       Ing. Adrian Leon
