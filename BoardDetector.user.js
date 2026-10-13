@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         InCa ACS - NOC Slot Outage Monitor
 // @namespace    Violentmonkey Scripts
-// @version      3.1
-// @description  Monitoreo en tiempo real de caídas a cero (online=0).
+// @version      4.3
+// @description  Monitoreo de caídas a cero (online=0) bajo demanda con reintento automático, progreso y copia al portapapeles.
 // @author       Ing. Adrian Leon
 // @updateURL    https://raw.githubusercontent.com/TakRiuto/ACSScripts/release/BoardDetector.user.js
 // @downloadURL  https://raw.githubusercontent.com/TakRiuto/ACSScripts/release/BoardDetector.user.js
@@ -14,167 +14,321 @@
 (function () {
     'use strict';
 
-    // Estado global reactivo
     let currentOltId = null;
     let lastTelemetryTimestamp = null;
     const slotCache = new Map();
-    const pendingSlots = new Set();
+    let isFetching = false;
+    let currentResults = [];
 
-    // Inyección de estilos con tokens exactos del NOC Design System
+    // Estilos UI (Gris Grafito + Google Sans)
     const styles = `
+        @import url('https://fonts.googleapis.com/css2?family=Open+Sans:wght@400;500;600;700&display=swap');
+
         :root {
-            --accent: #00f0ff;
-            --accent-rgb: 0, 240, 255;
-            --bg-base: #0a0f14;
-            --bg-surface: #0d1117;
-            --bg-surface-hover: #161b22;
-            --bg-border: #21262d;
-            --bg-border-strong: #30363d;
+            --noc-font: 'Google Sans', 'Open Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+            --noc-bg-canvas: #161a1f;
+            --noc-bg-panel: #1f242c;
+            --noc-bg-card: #272d36;
+            --noc-bg-card-hover: #2e3540;
+            --noc-border-subtle: #333b47;
+            --noc-border-strong: #444e5e;
 
-            --bg-error-muted: #240a0a;
-            --border-error-muted: #4d0000;
-            --text-error-muted: #ff0055;
-            --status-error: #ff0055;
+            --noc-text-main: #e6ebf2;
+            --noc-text-muted: #9aa5b5;
+            --noc-text-dim: #6c7684;
 
-            --bg-success-muted: #0d1a14;
-            --border-success-muted: #004d26;
-            --status-success: #00ff66;
+            --noc-red-bg: #3a1d22;
+            --noc-red-border: #732a33;
+            --noc-red-text: #ff6b7a;
 
-            --text-primary: #c9d1d9;
-            --text-secondary: #8b949e;
-            --text-muted: #484f58;
+            --noc-green-bg: #193324;
+            --noc-green-border: #255237;
+            --noc-green-text: #4cd984;
 
-            --font-main: "IBM Plex Sans", -apple-system, sans-serif;
-            --font-mono: "IBM Plex Mono", "Cascadia Code", monospace;
-            --radius-base: 0px;
+            --noc-blue-accent: #3d8bfd;
+            --noc-blue-hover: #2b77e5;
         }
 
-        /* Badge minimalista brutalista */
+        /* Botón de la barra de la OLT */
+        .btn-audit-trigger {
+            background-color: var(--noc-bg-card);
+            color: var(--noc-text-main);
+            border: 1px solid var(--noc-border-subtle);
+            font-family: var(--noc-font);
+            font-size: 11px;
+            font-weight: 600;
+            padding: 4px 10px;
+            border-radius: 4px;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            margin-left: 12px;
+            vertical-align: middle;
+            transition: all 0.15s ease;
+        }
+        .btn-audit-trigger:hover {
+            background-color: var(--noc-bg-card-hover);
+            border-color: var(--noc-blue-accent);
+            color: #fff;
+        }
+
+        /* Badges de la tabla */
         .noc-slot-badge {
-            font-family: var(--font-mono);
+            font-family: var(--noc-font);
             font-size: 11px;
             font-weight: 700;
-            line-height: 1;
-            padding: 3px 6px;
-            border-radius: var(--radius-base);
+            padding: 2px 7px;
+            border-radius: 3px;
             display: inline-block;
             margin-left: 6px;
             vertical-align: middle;
             user-select: none;
-            box-sizing: border-box;
+            cursor: pointer;
             border: 1px solid transparent;
         }
-
         .noc-badge-ok {
-            background: var(--bg-success-muted);
-            border-color: var(--border-success-muted);
-            color: var(--status-success);
-            opacity: 0.85;
+            background: var(--noc-green-bg);
+            border-color: var(--noc-green-border);
+            color: var(--noc-green-text);
         }
-
         .noc-badge-alert {
-            background: var(--bg-error-muted);
-            border-color: var(--border-error-muted);
-            color: var(--status-error);
-            cursor: pointer;
+            background: var(--noc-red-bg);
+            border-color: var(--noc-red-border);
+            color: var(--noc-red-text);
         }
 
-        .noc-badge-alert:hover {
-            border-color: var(--status-error);
-            filter: brightness(1.2);
-        }
-
-        /* Modal Overlay NOC */
-        .noc-modal-overlay {
+        /* Menú lateral flotante (Drawer) */
+        .noc-drawer-overlay {
             position: fixed;
             inset: 0;
-            background: rgba(0, 0, 0, 0.85);
-            backdrop-filter: blur(3px);
-            z-index: 100000;
+            background: rgba(10, 13, 17, 0.65);
+            backdrop-filter: blur(2px);
+            z-index: 999999;
             display: flex;
-            align-items: center;
-            justify-content: center;
+            justify-content: flex-end;
+            animation: fadeIn 0.15s ease-out;
         }
 
-        .noc-modal-box {
-            background: var(--bg-surface);
-            border: 1px solid var(--bg-border-strong);
-            border-radius: var(--radius-base);
-            width: 580px;
-            max-width: 95vw;
-            max-height: 85vh;
+        .noc-drawer {
+            width: 530px;
+            max-width: 92vw;
+            height: 100vh;
+            background: var(--noc-bg-panel);
+            border-left: 1px solid var(--noc-border-subtle);
+            box-shadow: -8px 0 30px rgba(0,0,0,0.5);
             display: flex;
             flex-direction: column;
-            box-shadow: 0 10px 40px rgba(0,0,0,0.8);
-            color: var(--text-primary);
-            font-family: var(--font-main);
+            font-family: var(--noc-font);
+            color: var(--noc-text-main);
+            animation: slideIn 0.2s ease-out;
         }
 
-        .noc-modal-header {
-            padding: 12px 16px;
-            background: var(--bg-base);
-            border-bottom: 1px solid var(--bg-border-strong);
+        @keyframes slideIn {
+            from { transform: translateX(100%); }
+            to { transform: translateX(0); }
+        }
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+
+        .noc-drawer-header {
+            padding: 16px 20px;
+            background: var(--noc-bg-canvas);
+            border-bottom: 1px solid var(--noc-border-subtle);
             display: flex;
             justify-content: space-between;
             align-items: center;
         }
 
-        .noc-modal-title {
-            margin: 0;
-            font-size: 13px;
+        .noc-drawer-title {
+            font-size: 14px;
             font-weight: 700;
-            letter-spacing: 0.5px;
-            color: var(--accent);
-            font-family: var(--font-mono);
-            text-transform: uppercase;
+            color: var(--noc-text-main);
+            display: flex;
+            align-items: center;
+            gap: 8px;
         }
 
-        .noc-modal-close {
+        .noc-drawer-close {
             background: none;
             border: none;
-            color: var(--text-muted);
-            font-size: 18px;
+            color: var(--noc-text-muted);
+            font-size: 20px;
             cursor: pointer;
+            padding: 0 4px;
             line-height: 1;
-            padding: 0;
+        }
+        .noc-drawer-close:hover { color: #fff; }
+
+        /* Toolbar del Drawer */
+        .noc-drawer-toolbar {
+            padding: 12px 20px;
+            background: var(--noc-bg-canvas);
+            border-bottom: 1px solid var(--noc-border-subtle);
+            display: flex;
+            gap: 10px;
+            align-items: center;
         }
 
-        .noc-modal-close:hover {
-            color: var(--status-error);
+        .btn-modal-action {
+            background-color: var(--noc-blue-accent);
+            color: #fff;
+            border: none;
+            padding: 8px 14px;
+            font-family: var(--noc-font);
+            font-size: 12px;
+            font-weight: 600;
+            border-radius: 4px;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            transition: background-color 0.15s ease;
         }
+        .btn-modal-action:hover { background-color: var(--noc-blue-hover); }
+        .btn-modal-action:disabled { opacity: 0.5; cursor: not-allowed; }
 
-        .noc-modal-body {
-            padding: 16px;
+        .btn-modal-copy {
+            background-color: var(--noc-bg-card);
+            color: var(--noc-text-main);
+            border: 1px solid var(--noc-border-subtle);
+            padding: 8px 14px;
+            font-family: var(--noc-font);
+            font-size: 12px;
+            font-weight: 600;
+            border-radius: 4px;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            transition: all 0.15s ease;
+        }
+        .btn-modal-copy:hover:not(:disabled) {
+            background-color: var(--noc-bg-card-hover);
+            border-color: var(--noc-green-text);
+            color: var(--noc-green-text);
+        }
+        .btn-modal-copy:disabled { opacity: 0.4; cursor: not-allowed; }
+
+        .noc-drawer-body {
+            flex: 1;
+            padding: 16px 20px;
             overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
         }
 
-        /* Tabla estilo .v-table */
-        .noc-v-table {
+        /* Barra de Progreso */
+        .noc-progress-container {
             width: 100%;
-            border-collapse: separate;
-            border-spacing: 0;
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            padding: 10px 14px;
+            background: var(--noc-bg-card);
+            border: 1px solid var(--noc-border-subtle);
+            border-radius: 6px;
+        }
+        .noc-progress-header {
+            display: flex;
+            justify-content: space-between;
             font-size: 11px;
-            font-family: var(--font-mono);
-            text-align: left;
+            color: var(--noc-text-muted);
+        }
+        .noc-progress-track {
+            width: 100%;
+            height: 6px;
+            background: var(--noc-bg-canvas);
+            border-radius: 3px;
+            overflow: hidden;
+        }
+        .noc-progress-fill {
+            height: 100%;
+            background: var(--noc-blue-accent);
+            width: 0%;
+            transition: width 0.2s ease;
         }
 
-        .noc-v-table th {
-            padding: 8px 12px;
-            background: #05080a;
-            color: var(--text-secondary);
+        /* Tarjeta de Slot */
+        .noc-slot-card {
+            background: var(--noc-bg-card);
+            border: 1px solid var(--noc-border-subtle);
+            border-radius: 6px;
+            padding: 12px 14px;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+        .noc-card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .noc-card-title {
+            font-size: 13px;
             font-weight: 700;
-            border-bottom: 1px solid var(--bg-border-strong);
-            text-transform: uppercase;
+            color: var(--noc-text-main);
         }
 
-        .noc-v-table td {
-            padding: 8px 12px;
-            border-bottom: 1px solid var(--bg-border);
-            background: rgba(0,0,0,0.15);
+        .noc-events-list {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            margin-top: 4px;
+        }
+        .noc-event-row {
+            background: var(--noc-bg-panel);
+            border: 1px solid var(--noc-border-subtle);
+            border-radius: 4px;
+            padding: 7px 10px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 11px;
+        }
+        .noc-event-dates {
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+        }
+        .noc-event-badge-dur {
+            background: var(--noc-bg-canvas);
+            color: var(--noc-text-muted);
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-size: 10px;
+            font-weight: 600;
+            border: 1px solid var(--noc-border-subtle);
         }
 
-        .noc-v-table tr:hover td {
-            background: var(--bg-surface-hover);
+        .noc-summary-bar {
+            padding: 10px 14px;
+            background: var(--noc-bg-canvas);
+            border: 1px solid var(--noc-border-subtle);
+            border-radius: 6px;
+            font-size: 12px;
+            display: flex;
+            justify-content: space-around;
+            color: var(--noc-text-muted);
+        }
+        .noc-summary-bar strong { color: var(--noc-text-main); }
+
+        .noc-empty-placeholder {
+            text-align: center;
+            color: var(--noc-text-muted);
+            padding: 50px 20px;
+            font-size: 13px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 12px;
+        }
+        .noc-empty-placeholder i {
+            font-size: 28px;
+            color: var(--noc-text-dim);
         }
     `;
 
@@ -198,68 +352,11 @@
         return match ? match[1] : null;
     }
 
-    // Modal de Historial
-    function showModal(slotId, events) {
-        const existing = document.getElementById('noc-modal-overlay-root');
-        if (existing) existing.remove();
-
-        const overlay = document.createElement('div');
-        overlay.id = 'noc-modal-overlay-root';
-        overlay.className = 'noc-modal-overlay';
-
-        const rows = events.map((ev, i) => {
-            const start = new Date(ev.start).toLocaleString('es-VE', { hour12: false });
-            const end = ev.end ? new Date(ev.end).toLocaleString('es-VE', { hour12: false }) : 'EN CURSO';
-            return `
-                <tr>
-                    <td style="color: var(--text-secondary);">#${i + 1}</td>
-                    <td style="color: var(--status-error);">${start}</td>
-                    <td style="color: ${ev.end ? 'var(--status-success)' : 'var(--status-error)'};">${end}</td>
-                    <td style="color: var(--accent);">${ev.duration}</td>
-                </tr>
-            `;
-        }).join('');
-
-        overlay.innerHTML = `
-            <div class="noc-modal-box">
-                <div class="noc-modal-header">
-                    <span class="noc-modal-title">HISTORIAL CAÍDAS [ONLINE = 0] :: SLOT ${slotId}</span>
-                    <button class="noc-modal-close" id="btn-close-noc-modal">&#x2715;</button>
-                </div>
-                <div class="noc-modal-body">
-                    <table class="noc-v-table">
-                        <thead>
-                            <tr>
-                                <th>#</th>
-                                <th>Inicio Caída</th>
-                                <th>Restablecido</th>
-                                <th>Duración</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            ${rows}
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-        `;
-
-        document.body.appendChild(overlay);
-
-        const close = () => overlay.remove();
-        document.getElementById('btn-close-noc-modal').onclick = close;
-        overlay.onclick = (e) => { if (e.target === overlay) close(); };
-
-        const escListener = (e) => {
-            if (e.key === 'Escape') {
-                close();
-                document.removeEventListener('keydown', escListener);
-            }
-        };
-        document.addEventListener('keydown', escListener);
+    function getOltName() {
+        const titleEl = document.querySelector('.olt-monitoring-details-olt-title');
+        return titleEl?.textContent?.trim() || `OLT-${getOltIdFromUrl() || 'Unknown'}`;
     }
 
-    // Verifica si un valor representa explícitamente "N/A", null o inválido
     function isNaValue(val) {
         if (val === null || val === undefined) return true;
         if (typeof val === 'string') {
@@ -269,7 +366,7 @@
         return false;
     }
 
-    // Procesar caídas (N/A no es 0. Solo cuenta caídas reales si hay ONTs en la tarjeta)
+    // Regla de análisis de caídas (N/A no es 0)
     function parseOutageEvents(data) {
         data.sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
         const events = [];
@@ -279,22 +376,16 @@
         for (let i = 0; i < data.length; i++) {
             const item = data[i];
 
-            // 1. Descartar si el valor es N/A, null o indefinido
-            if (isNaValue(item.online)) {
-                continue;
-            }
+            if (isNaValue(item.online)) continue;
 
             const online = Number(item.online);
             const offline = Number(item.offline) || 0;
             const suspended = Number(item.suspended) || 0;
             const totalOnus = online + offline + suspended;
 
-            // 2. Si el valor es inválido o la tarjeta no tiene equipos asignados (total 0 = tarjeta vacía/N/A)
-            if (isNaN(online) || totalOnus === 0) {
-                continue;
-            }
+            // Descartar si el slot está desocupado o es inválido
+            if (isNaN(online) || totalOnus === 0) continue;
 
-            // 3. Caída real: online es exactamente 0 pero sí hay ONTs en la tarjeta
             if (online === 0) {
                 if (!inOutage) {
                     inOutage = true;
@@ -307,7 +398,7 @@
                     events.push({
                         start: outageStart,
                         end: item.createdAt,
-                        duration: `${diffMin}m`
+                        duration: `${diffMin} min`
                     });
                     outageStart = null;
                 }
@@ -318,90 +409,412 @@
             events.push({
                 start: outageStart,
                 end: null,
-                duration: 'ACTIVO'
+                duration: 'En curso'
             });
         }
 
         return events;
     }
 
-    // Actualiza o inserta el badge numérico sin parpadeos
-    function updateBadge(targetCell, slotId, events) {
-        const innerP = targetCell.querySelector('p.datatable-body-cell-label-inner');
-        if (!innerP) return;
+    // Consulta de datos de un Slot con REINTENTO AUTOMÁTICO (hasta 3 intentos)
+    async function fetchSlotWithRetry(oltId, slotId, token, maxRetries = 3) {
+        if (slotCache.has(slotId)) return slotCache.get(slotId);
 
-        let badge = innerP.querySelector('.noc-slot-badge');
-        if (!badge) {
-            badge = document.createElement('span');
-            innerP.appendChild(badge);
+        const url = `https://190.153.58.82/api/fttx/monitoring/olt-usage/${oltId}/statuses/slots/${slotId}?filter=%7B%22order%22:%22createdAt%20ASC%22,%22include%22:%7B%7D%7D`;
+
+        for (let attempt = 1; attempt <= maxRetries; attempt++) {
+            try {
+                const resp = await fetch(url, {
+                    headers: {
+                        'accept': 'application/json, text/plain, */*',
+                        'x-access-token': token
+                    }
+                });
+
+                if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+
+                const data = await resp.json();
+                if (Array.isArray(data)) {
+                    const events = parseOutageEvents(data);
+                    slotCache.set(slotId, events);
+                    return events;
+                }
+                throw new Error('Respuesta no válida');
+            } catch (e) {
+                console.warn(`[NOC Monitor] Slot ${slotId} intento ${attempt}/${maxRetries} falló:`, e.message);
+                if (attempt === maxRetries) {
+                    console.error(`[NOC Monitor] Slot ${slotId} descartado tras ${maxRetries} intentos.`);
+                    return [];
+                }
+                await new Promise(res => setTimeout(res, attempt * 500));
+            }
         }
-
-        const count = events.length;
-        badge.className = `noc-slot-badge ${count > 0 ? 'noc-badge-alert' : 'noc-badge-ok'}`;
-        badge.textContent = count;
-        badge.title = count > 0
-            ? `Slot ${slotId}: ${count} caída(s) a 0. Click para ver historial.`
-            : `Slot ${slotId}: Sin caídas a cero`;
-
-        if (count > 0) {
-            badge.onclick = (e) => {
-                e.stopPropagation();
-                showModal(slotId, events);
-            };
-        } else {
-            badge.onclick = null;
-        }
+        return [];
     }
 
-    // Consulta de la API para un Slot específico
-    async function loadSlotData(oltId, slotId, token, targetCell) {
-        if (slotCache.has(slotId)) {
-            updateBadge(targetCell, slotId, slotCache.get(slotId));
-            return;
+    // Render de tarjetas dentro del Drawer
+    function renderCardsInsideDrawer(results) {
+        const bodyEl = document.getElementById('noc-drawer-body-container');
+        if (!bodyEl) return;
+
+        let totalEventsCount = 0;
+        let slotsWithOutages = 0;
+
+        const cardsHtml = results.map(item => {
+            const count = item.events.length;
+            totalEventsCount += count;
+            if (count > 0) slotsWithOutages++;
+
+            const statusBadge = count > 0
+                ? `<span class="noc-slot-badge noc-badge-alert">${count} caída(s)</span>`
+                : `<span class="noc-slot-badge noc-badge-ok">Estable</span>`;
+
+            const eventsList = count > 0
+                ? `<div class="noc-events-list">
+                    ${item.events.map(ev => `
+                        <div class="noc-event-row">
+                            <div class="noc-event-dates">
+                                <span style="color: var(--noc-red-text);">Caída: ${new Date(ev.start).toLocaleString('es-VE')}</span>
+                                <span style="color: ${ev.end ? 'var(--noc-green-text)' : 'var(--noc-red-text)'};">
+                                    ${ev.end ? `Recuperado: ${new Date(ev.end).toLocaleString('es-VE')}` : 'Estado: Actualmente Caído'}
+                                </span>
+                            </div>
+                            <span class="noc-event-badge-dur">${ev.duration}</span>
+                        </div>
+                    `).join('')}
+                   </div>`
+                : `<div style="font-size: 11px; color: var(--noc-text-dim);">Sin interrupciones a online = 0</div>`;
+
+            return `
+                <div class="noc-slot-card">
+                    <div class="noc-card-header">
+                        <span class="noc-card-title">Tarjeta / Slot ${item.slotId}</span>
+                        ${statusBadge}
+                    </div>
+                    ${eventsList}
+                </div>
+            `;
+        }).join('');
+
+        bodyEl.innerHTML = `
+            <div class="noc-summary-bar">
+                <span>Slots analizados: <strong>${results.length}</strong></span>
+                <span>Con incidencias: <strong style="color: var(--noc-red-text);">${slotsWithOutages}</strong></span>
+                <span>Total Caídas: <strong style="color: var(--noc-red-text);">${totalEventsCount}</strong></span>
+            </div>
+            ${cardsHtml}
+        `;
+    }
+
+    // Generar texto estructurado y copiar al portapapeles
+    async function copyReportToClipboard() {
+        if (!currentResults || currentResults.length === 0) return;
+
+        const btnCopy = document.getElementById('btn-modal-copy-report');
+        const oltName = getOltName();
+        const oltId = getOltIdFromUrl();
+        const now = new Date().toLocaleString('es-VE');
+
+        let totalEvents = 0;
+        const affectedSlots = [];
+        const cleanSlots = [];
+
+        currentResults.forEach(item => {
+            if (item.events.length > 0) {
+                totalEvents += item.events.length;
+                affectedSlots.push(item);
+            } else {
+                cleanSlots.push(item.slotId);
+            }
+        });
+
+        let txt = `=================================================================\n`;
+        txt += `   REPORTE DE INCIDENCIAS DE TARJETAS (ONLINE = 0) - NOC\n`;
+        txt += `=================================================================\n`;
+        txt += `OLT:               ${oltName} (ID: ${oltId})\n`;
+        txt += `Fecha Generación:  ${now}\n`;
+        txt += `Slots Analizados:  ${currentResults.length}\n`;
+        txt += `Slots Afectados:   ${affectedSlots.length}\n`;
+        txt += `Total Caídas:      ${totalEvents}\n`;
+        txt += `=================================================================\n\n`;
+
+        if (affectedSlots.length > 0) {
+            txt += `[ DETALLE DE TARJETAS CON CAÍDAS ]\n`;
+            txt += `-----------------------------------------------------------------\n`;
+            affectedSlots.forEach(item => {
+                txt += `\n* SLOT ${item.slotId} :: [${item.events.length} Evento(s)]\n`;
+                item.events.forEach((ev, idx) => {
+                    const start = new Date(ev.start).toLocaleString('es-VE');
+                    const end = ev.end ? new Date(ev.end).toLocaleString('es-VE') : 'En curso';
+                    txt += `  [#${idx + 1}] Caída: ${start} | Restablecido: ${end} | Duración: ${ev.duration}\n`;
+                });
+            });
+            txt += `\n-----------------------------------------------------------------\n`;
+        } else {
+            txt += `[+] No se registraron caídas a cero en ningún slot de esta OLT.\n\n`;
         }
 
-        if (pendingSlots.has(slotId)) return;
-        pendingSlots.add(slotId);
+        if (cleanSlots.length > 0) {
+            txt += `\n[ SLOTS ESTABLES / SIN CAÍDAS ]\n`;
+            txt += `Slots: ${cleanSlots.join(', ')}\n`;
+        }
+
+        txt += `\n=================================================================\n`;
+        txt += `Generado automáticamente por InCa ACS BoardDetector\n`;
 
         try {
-            const url = `https://190.153.58.82/api/fttx/monitoring/olt-usage/${oltId}/statuses/slots/${slotId}?filter=%7B%22order%22:%22createdAt%20ASC%22,%22include%22:%7B%7D%7D`;
-            const resp = await fetch(url, {
-                headers: {
-                    'accept': 'application/json, text/plain, */*',
-                    'x-access-token': token
-                }
-            });
-
-            if (!resp.ok) return;
-
-            const data = await resp.json();
-            if (Array.isArray(data)) {
-                const events = parseOutageEvents(data);
-                slotCache.set(slotId, events);
-                updateBadge(targetCell, slotId, events);
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                await navigator.clipboard.writeText(txt);
+            } else {
+                // Fallback para navegadores antiguos
+                const ta = document.createElement('textarea');
+                ta.value = txt;
+                ta.style.position = 'fixed';
+                ta.style.opacity = '0';
+                document.body.appendChild(ta);
+                ta.select();
+                document.execCommand('copy');
+                document.body.removeChild(ta);
             }
-        } catch (e) {
-            console.error('[NOC Monitor] Error slot', slotId, e);
-        } finally {
-            pendingSlots.delete(slotId);
+
+            if (btnCopy) {
+                const originalHtml = btnCopy.innerHTML;
+                btnCopy.innerHTML = `<i class="fa fa-check" style="color: var(--noc-green-text);"></i> ¡Copiado!`;
+                btnCopy.style.borderColor = 'var(--noc-green-text)';
+                setTimeout(() => {
+                    btnCopy.innerHTML = originalHtml;
+                    btnCopy.style.borderColor = 'var(--noc-border-subtle)';
+                }, 2200);
+            }
+        } catch (err) {
+            console.error('[NOC Monitor] Error copiando al portapapeles:', err);
+            alert('Error al copiar al portapapeles.');
         }
     }
 
-    // Verificación principal del estado de la página
-    function processTable() {
+    // Ejecutar consulta con Contador de Progreso
+    async function executeQueryFromModal() {
+        if (isFetching) return;
         const oltId = getOltIdFromUrl();
         const token = getToken();
         if (!oltId || !token) return;
 
-        // 1. Detección de cambio de OLT por URL
+        const table = document.querySelector('table.olt-usage-details-datatable');
+        if (!table) return;
+
+        const rows = table.querySelectorAll('tbody tr');
+        const validSlots = [];
+
+        rows.forEach(row => {
+            const firstCell = row.querySelector('td:first-child');
+            const totalCell = row.querySelector('td:last-child');
+            if (!firstCell || !totalCell) return;
+
+            if (totalCell.textContent.trim().toUpperCase().includes('N/A')) return;
+
+            const slotText = firstCell.querySelector('.datatable-body-cell-label-inner')?.textContent?.trim()
+                          || firstCell.textContent.trim();
+            const slotId = parseInt(slotText, 10);
+            if (!isNaN(slotId)) validSlots.push(slotId);
+        });
+
+        const btnQuery = document.getElementById('btn-modal-query-action');
+        const btnCopy = document.getElementById('btn-modal-copy-report');
+        const bodyEl = document.getElementById('noc-drawer-body-container');
+
+        if (btnQuery) btnQuery.disabled = true;
+        if (btnCopy) btnCopy.disabled = true;
+
+        isFetching = true;
+
+        bodyEl.innerHTML = `
+            <div class="noc-progress-container">
+                <div class="noc-progress-header">
+                    <span id="noc-progress-label">Iniciando consulta de slots...</span>
+                    <span id="noc-progress-pct">0%</span>
+                </div>
+                <div class="noc-progress-track">
+                    <div class="noc-progress-fill" id="noc-progress-fill-bar"></div>
+                </div>
+            </div>
+            <div class="noc-empty-placeholder" style="padding: 30px;">
+                <i class="fa fa-spinner fa-spin" style="color: var(--noc-blue-accent);"></i>
+                <span>Analizando tarjetas...</span>
+            </div>
+        `;
+
+        const total = validSlots.length;
+        let completed = 0;
+        const results = [];
+
+        try {
+            for (const slotId of validSlots) {
+                const events = await fetchSlotWithRetry(oltId, slotId, token);
+                results.push({ slotId, events });
+                completed++;
+
+                const pct = Math.round((completed / total) * 100);
+                const progressLabel = document.getElementById('noc-progress-label');
+                const progressPct = document.getElementById('noc-progress-pct');
+                const progressBar = document.getElementById('noc-progress-fill-bar');
+
+                if (progressLabel) progressLabel.textContent = `Procesando: Slot ${slotId} (${completed} / ${total})`;
+                if (progressPct) progressPct.textContent = `${pct}%`;
+                if (progressBar) progressBar.style.width = `${pct}%`;
+            }
+
+            results.sort((a, b) => b.events.length - a.events.length);
+            currentResults = results;
+
+            renderCardsInsideDrawer(results);
+            syncTableBadges();
+
+            if (btnCopy) btnCopy.disabled = false;
+        } finally {
+            isFetching = false;
+            if (btnQuery) {
+                btnQuery.disabled = false;
+                btnQuery.innerHTML = `<i class="fa fa-refresh"></i> Actualizar Consulta`;
+            }
+        }
+    }
+
+    // Abrir menú lateral flotante de inmediato
+    function openDrawerImmediate() {
+        const existing = document.getElementById('noc-drawer-overlay-root');
+        if (existing) {
+            existing.style.display = 'flex';
+            return;
+        }
+
+        const overlay = document.createElement('div');
+        overlay.id = 'noc-drawer-overlay-root';
+        overlay.className = 'noc-drawer-overlay';
+
+        overlay.innerHTML = `
+            <div class="noc-drawer">
+                <div class="noc-drawer-header">
+                    <div class="noc-drawer-title">
+                        <i class="fa fa-server" style="color: var(--noc-blue-accent);"></i>
+                        Auditoría de Caídas (Online = 0)
+                    </div>
+                    <button class="noc-drawer-close" id="btn-close-noc-drawer">&times;</button>
+                </div>
+                <div class="noc-drawer-toolbar">
+                    <button class="btn-modal-action" id="btn-modal-query-action">
+                        <i class="fa fa-search"></i> Consultar Caídas
+                    </button>
+                    <button class="btn-modal-copy" id="btn-modal-copy-report" disabled title="Disponible tras consultar">
+                        <i class="fa fa-clipboard"></i> Copiar Reporte
+                    </button>
+                </div>
+                <div class="noc-drawer-body" id="noc-drawer-body-container">
+                    <div class="noc-empty-placeholder">
+                        <i class="fa fa-line-chart"></i>
+                        <span>Presiona <strong>"Consultar Caídas"</strong> para iniciar el análisis con reintento automático.</span>
+                    </div>
+                </div>
+            </div>
+        `;
+
+        document.body.appendChild(overlay);
+
+        // Eventos
+        document.getElementById('btn-modal-query-action').onclick = executeQueryFromModal;
+        document.getElementById('btn-modal-copy-report').onclick = copyReportToClipboard;
+
+        const close = () => overlay.remove();
+        document.getElementById('btn-close-noc-drawer').onclick = close;
+        overlay.onclick = (e) => { if (e.target === overlay) close(); };
+
+        const escListener = (e) => {
+            if (e.key === 'Escape') {
+                close();
+                document.removeEventListener('keydown', escListener);
+            }
+        };
+        document.addEventListener('keydown', escListener);
+    }
+
+    // Sincronizar badges pequeños en la tabla de slots
+    function syncTableBadges() {
+        const table = document.querySelector('table.olt-usage-details-datatable');
+        if (!table) return;
+
+        const rows = table.querySelectorAll('tbody tr');
+        rows.forEach(row => {
+            const firstCell = row.querySelector('td:first-child');
+            const totalCell = row.querySelector('td:last-child');
+            if (!firstCell || !totalCell) return;
+
+            if (totalCell.textContent.trim().toUpperCase().includes('N/A')) return;
+
+            const slotText = firstCell.querySelector('.datatable-body-cell-label-inner')?.textContent?.trim()
+                          || firstCell.textContent.trim();
+            const slotId = parseInt(slotText, 10);
+
+            if (!isNaN(slotId) && slotCache.has(slotId)) {
+                const events = slotCache.get(slotId);
+                const innerP = totalCell.querySelector('p.datatable-body-cell-label-inner');
+                if (!innerP) return;
+
+                let badge = innerP.querySelector('.noc-slot-badge');
+                if (!badge) {
+                    badge = document.createElement('span');
+                    innerP.appendChild(badge);
+                }
+
+                const count = events.length;
+                badge.className = `noc-slot-badge ${count > 0 ? 'noc-badge-alert' : 'noc-badge-ok'}`;
+                badge.textContent = count;
+                badge.title = `Slot ${slotId}: ${count} evento(s). Clic para abrir auditoría.`;
+                badge.onclick = (e) => {
+                    e.stopPropagation();
+                    openDrawerImmediate();
+                };
+            }
+        });
+    }
+
+    // Inyectar botón disparador en la cabecera
+    function injectTriggerButton() {
+        if (document.getElementById('btn-trigger-noc-drawer')) return;
+
+        const subtitleContainer = document.querySelector('.blockpanel-subtitle');
+        if (!subtitleContainer) return;
+
+        const button = document.createElement('button');
+        button.id = 'btn-trigger-noc-drawer';
+        button.className = 'btn-audit-trigger';
+        button.innerHTML = `<i class="fa fa-list-alt"></i> Auditar Caídas de Slots`;
+        button.onclick = (e) => {
+            e.preventDefault();
+            openDrawerImmediate();
+        };
+
+        subtitleContainer.appendChild(button);
+    }
+
+    // Verificación de la vista
+    function processView() {
+        const oltId = getOltIdFromUrl();
+        const token = getToken();
+        if (!oltId || !token) return;
+
+        injectTriggerButton();
+
+        // Si cambió de OLT
         if (currentOltId !== oltId) {
             currentOltId = oltId;
             lastTelemetryTimestamp = null;
             slotCache.clear();
+            currentResults = [];
             document.querySelectorAll('.noc-slot-badge').forEach(b => b.remove());
+            const drawerOverlay = document.getElementById('noc-drawer-overlay-root');
+            if (drawerOverlay) drawerOverlay.remove();
         }
 
-        // 2. Detección de actualización por fecha de telemetría (mismo OLT)
+        // Si se actualizó la fecha de telemetría en la misma OLT
         const timestampEl = document.querySelector('.blockpanel-title span.label-primary.pull-right');
         if (timestampEl) {
             const currentTs = timestampEl.textContent.trim();
@@ -412,56 +825,32 @@
             lastTelemetryTimestamp = currentTs;
         }
 
-        // 3. Procesar filas de la tabla
-        const table = document.querySelector('table.olt-usage-details-datatable');
-        if (!table) return;
-
-        const rows = table.querySelectorAll('tbody tr');
-        rows.forEach(row => {
-            const firstCell = row.querySelector('td:first-child');
-            const totalCell = row.querySelector('td:last-child');
-            if (!firstCell || !totalCell) return;
-
-            // Si el total dice "N/A", la tarjeta no está en servicio / no tiene equipos
-            const totalText = totalCell.textContent.trim().toUpperCase();
-            if (totalText.includes('N/A')) return;
-
-            const slotText = firstCell.querySelector('.datatable-body-cell-label-inner')?.textContent?.trim()
-                          || firstCell.textContent.trim();
-            const slotId = parseInt(slotText, 10);
-
-            if (!isNaN(slotId)) {
-                loadSlotData(oltId, slotId, token, totalCell);
-            }
-        });
+        syncTableBadges();
     }
 
-    // Escucha de navegación SPA (Angular Routing)
-    const handleUrlChange = () => {
-        setTimeout(processTable, 200);
-    };
-
+    // Escucha SPA Router
+    const handleUrlChange = () => setTimeout(processView, 200);
     window.addEventListener('popstate', handleUrlChange);
-    const originalPushState = history.pushState;
+
+    const origPush = history.pushState;
     history.pushState = function () {
-        originalPushState.apply(this, arguments);
+        origPush.apply(this, arguments);
         handleUrlChange();
     };
-    const originalReplaceState = history.replaceState;
+
+    const origReplace = history.replaceState;
     history.replaceState = function () {
-        originalReplaceState.apply(this, arguments);
+        origReplace.apply(this, arguments);
         handleUrlChange();
     };
 
-    // Observer reactivo para cambios dinámicos en el DOM
-    let debounceTimer = null;
+    // Observer reactivo
+    let timer = null;
     const observer = new MutationObserver(() => {
-        if (debounceTimer) clearTimeout(debounceTimer);
-        debounceTimer = setTimeout(processTable, 250);
+        if (timer) clearTimeout(timer);
+        timer = setTimeout(processView, 250);
     });
-
     observer.observe(document.body, { childList: true, subtree: true });
 
-    // Arranque inicial
-    setTimeout(processTable, 800);
+    setTimeout(processView, 800);
 })();
