@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         InCa ACS - NOC Slot Outage Monitor
 // @namespace    Violentmonkey Scripts
-// @version      4.3
-// @description  Monitoreo de caídas a cero (online=0) bajo demanda con reintento automático, progreso y copia al portapapeles.
+// @version      4.7
+// @description  Auditoría de estabilidad y telemetría por tarjeta (Slots PON) bajo demanda.
 // @author       Ing. Adrian Leon
 // @updateURL    https://raw.githubusercontent.com/TakRiuto/ACSScripts/release/BoardDetector.user.js
 // @downloadURL  https://raw.githubusercontent.com/TakRiuto/ACSScripts/release/BoardDetector.user.js
@@ -20,7 +20,9 @@
     let isFetching = false;
     let currentResults = [];
 
-    // Estilos UI (Gris Grafito + Google Sans)
+    const CONCURRENCY_LIMIT = 3;
+    const FETCH_TIMEOUT_MS = 10000;
+
     const styles = `
         @import url('https://fonts.googleapis.com/css2?family=Open+Sans:wght@400;500;600;700&display=swap');
 
@@ -45,11 +47,14 @@
             --noc-green-border: #255237;
             --noc-green-text: #4cd984;
 
+            --noc-yellow-bg: #382d13;
+            --noc-yellow-border: #69521e;
+            --noc-yellow-text: #f5b041;
+
             --noc-blue-accent: #3d8bfd;
             --noc-blue-hover: #2b77e5;
         }
 
-        /* Botón de la barra de la OLT */
         .btn-audit-trigger {
             background-color: var(--noc-bg-card);
             color: var(--noc-text-main);
@@ -73,7 +78,6 @@
             color: #fff;
         }
 
-        /* Badges de la tabla */
         .noc-slot-badge {
             font-family: var(--noc-font);
             font-size: 11px;
@@ -97,8 +101,12 @@
             border-color: var(--noc-red-border);
             color: var(--noc-red-text);
         }
+        .noc-badge-error {
+            background: var(--noc-yellow-bg);
+            border-color: var(--noc-yellow-border);
+            color: var(--noc-yellow-text);
+        }
 
-        /* Menú lateral flotante (Drawer) */
         .noc-drawer-overlay {
             position: fixed;
             inset: 0;
@@ -143,12 +151,13 @@
         }
 
         .noc-drawer-title {
-            font-size: 14px;
+            font-size: 13px;
             font-weight: 700;
             color: var(--noc-text-main);
             display: flex;
             align-items: center;
             gap: 8px;
+            letter-spacing: 0.3px;
         }
 
         .noc-drawer-close {
@@ -162,7 +171,6 @@
         }
         .noc-drawer-close:hover { color: #fff; }
 
-        /* Toolbar del Drawer */
         .noc-drawer-toolbar {
             padding: 12px 20px;
             background: var(--noc-bg-canvas);
@@ -221,7 +229,6 @@
             gap: 12px;
         }
 
-        /* Barra de Progreso */
         .noc-progress-container {
             width: 100%;
             display: flex;
@@ -249,10 +256,9 @@
             height: 100%;
             background: var(--noc-blue-accent);
             width: 0%;
-            transition: width 0.2s ease;
+            transition: width 0.15s ease;
         }
 
-        /* Tarjeta de Slot */
         .noc-slot-card {
             background: var(--noc-bg-card);
             border: 1px solid var(--noc-border-subtle);
@@ -309,9 +315,9 @@
             background: var(--noc-bg-canvas);
             border: 1px solid var(--noc-border-subtle);
             border-radius: 6px;
-            font-size: 12px;
+            font-size: 11px;
             display: flex;
-            justify-content: space-around;
+            justify-content: space-between;
             color: var(--noc-text-muted);
         }
         .noc-summary-bar strong { color: var(--noc-text-main); }
@@ -320,11 +326,12 @@
             text-align: center;
             color: var(--noc-text-muted);
             padding: 50px 20px;
-            font-size: 13px;
+            font-size: 12px;
             display: flex;
             flex-direction: column;
             align-items: center;
             gap: 12px;
+            line-height: 1.5;
         }
         .noc-empty-placeholder i {
             font-size: 28px;
@@ -336,7 +343,6 @@
     styleEl.innerHTML = styles;
     document.head.appendChild(styleEl);
 
-    // Helpers
     function getToken() {
         try {
             const rawUser = localStorage.getItem('currentUser');
@@ -354,7 +360,7 @@
 
     function getOltName() {
         const titleEl = document.querySelector('.olt-monitoring-details-olt-title');
-        return titleEl?.textContent?.trim() || `OLT-${getOltIdFromUrl() || 'Unknown'}`;
+        return titleEl?.textContent?.trim() || `OLT-${getOltIdFromUrl() || 'N/A'}`;
     }
 
     function isNaValue(val) {
@@ -366,16 +372,53 @@
         return false;
     }
 
-    // Regla de análisis de caídas (N/A no es 0)
+    function parseDateSafe(dateStr) {
+        if (!dateStr) return null;
+        const normalized = typeof dateStr === 'string' && !dateStr.endsWith('Z') && !dateStr.includes('+')
+            ? `${dateStr.replace(' ', 'T')}Z`
+            : dateStr;
+        const d = new Date(normalized);
+        return isNaN(d.getTime()) ? new Date(dateStr) : d;
+    }
+
+    function formatDate(dateObj) {
+        if (!dateObj) return '';
+        return dateObj.toLocaleString('es-VE', {
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit',
+            hour12: false
+        });
+    }
+
+    function getSlotIdFromCell(cell) {
+        if (!cell) return null;
+        const targetNode = cell.querySelector('.datatable-body-cell-label-inner') || cell;
+        const rawText = targetNode.textContent.trim();
+        const match = rawText.match(/\b\d+\b/);
+        if (!match) return null;
+        const id = parseInt(match[0], 10);
+        return isNaN(id) ? null : id;
+    }
+
     function parseOutageEvents(data) {
-        data.sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+        if (!Array.isArray(data) || data.length === 0) return [];
+
+        const sorted = data.slice().sort((a, b) => {
+            const da = parseDateSafe(a.createdAt);
+            const db = parseDateSafe(b.createdAt);
+            return (da?.getTime() || 0) - (db?.getTime() || 0);
+        });
+
         const events = [];
         let inOutage = false;
         let outageStart = null;
 
-        for (let i = 0; i < data.length; i++) {
-            const item = data[i];
-
+        for (let i = 0; i < sorted.length; i++) {
+            const item = sorted[i];
             if (isNaValue(item.online)) continue;
 
             const online = Number(item.online);
@@ -383,7 +426,6 @@
             const suspended = Number(item.suspended) || 0;
             const totalOnus = online + offline + suspended;
 
-            // Descartar si el slot está desocupado o es inválido
             if (isNaN(online) || totalOnus === 0) continue;
 
             if (online === 0) {
@@ -394,7 +436,9 @@
             } else {
                 if (inOutage) {
                     inOutage = false;
-                    const diffMin = Math.round((new Date(item.createdAt) - new Date(outageStart)) / 60000);
+                    const dStart = parseDateSafe(outageStart);
+                    const dEnd = parseDateSafe(item.createdAt);
+                    const diffMin = (dStart && dEnd) ? Math.max(1, Math.round((dEnd - dStart) / 60000)) : 0;
                     events.push({
                         start: outageStart,
                         end: item.createdAt,
@@ -416,79 +460,161 @@
         return events;
     }
 
-    // Consulta de datos de un Slot con REINTENTO AUTOMÁTICO (hasta 3 intentos)
-    async function fetchSlotWithRetry(oltId, slotId, token, maxRetries = 3) {
-        if (slotCache.has(slotId)) return slotCache.get(slotId);
+    async function fetchWithTimeout(url, options = {}, timeoutMs = FETCH_TIMEOUT_MS) {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+        try {
+            const response = await fetch(url, {
+                ...options,
+                signal: controller.signal
+            });
+            clearTimeout(timer);
+            return response;
+        } catch (err) {
+            clearTimeout(timer);
+            throw err;
+        }
+    }
+
+    async function fetchSlotWithRetry(oltId, slotId, token, forceRefresh = false, maxRetries = 3) {
+        if (!forceRefresh && slotCache.has(slotId)) {
+            return slotCache.get(slotId);
+        }
 
         const url = `https://190.153.58.82/api/fttx/monitoring/olt-usage/${oltId}/statuses/slots/${slotId}?filter=%7B%22order%22:%22createdAt%20ASC%22,%22include%22:%7B%7D%7D`;
 
         for (let attempt = 1; attempt <= maxRetries; attempt++) {
             try {
-                const resp = await fetch(url, {
+                const resp = await fetchWithTimeout(url, {
                     headers: {
                         'accept': 'application/json, text/plain, */*',
                         'x-access-token': token
                     }
-                });
+                }, FETCH_TIMEOUT_MS);
+
+                if (resp.status === 404) {
+                    const result = { events: [], status: 'UNAVAILABLE' };
+                    slotCache.set(slotId, result);
+                    return result;
+                }
 
                 if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
 
                 const data = await resp.json();
                 if (Array.isArray(data)) {
                     const events = parseOutageEvents(data);
-                    slotCache.set(slotId, events);
-                    return events;
+                    const result = { events, status: 'OK' };
+                    slotCache.set(slotId, result);
+                    return result;
                 }
                 throw new Error('Respuesta no válida');
             } catch (e) {
-                console.warn(`[NOC Monitor] Slot ${slotId} intento ${attempt}/${maxRetries} falló:`, e.message);
                 if (attempt === maxRetries) {
-                    console.error(`[NOC Monitor] Slot ${slotId} descartado tras ${maxRetries} intentos.`);
-                    return [];
+                    const errorResult = { events: [], status: 'ERROR', errorMsg: e.name === 'AbortError' ? 'Timeout' : e.message };
+                    slotCache.set(slotId, errorResult);
+                    return errorResult;
                 }
-                await new Promise(res => setTimeout(res, attempt * 500));
+                await new Promise(res => setTimeout(res, attempt * 300));
             }
         }
-        return [];
+
+        return { events: [], status: 'ERROR', errorMsg: 'Sin respuesta del host' };
     }
 
-    // Render de tarjetas dentro del Drawer
+    async function runWorkerPool(items, limit, handler) {
+        const results = new Array(items.length);
+        let currentIndex = 0;
+        const total = items.length;
+        const workerCount = Math.min(limit, total);
+
+        const workers = Array.from({ length: workerCount }, async () => {
+            while (currentIndex < total) {
+                const index = currentIndex++;
+                results[index] = await handler(items[index]);
+            }
+        });
+
+        await Promise.all(workers);
+        return results;
+    }
+
+    function extractActiveSlotsFromDOM() {
+        const table = document.querySelector('table.olt-usage-details-datatable');
+        if (!table) return [];
+
+        const rows = table.querySelectorAll('tbody tr');
+        const slots = [];
+
+        rows.forEach(row => {
+            const cells = row.querySelectorAll('td');
+            if (cells.length < 2) return;
+
+            const lastCellText = cells[cells.length - 1].textContent.trim().toUpperCase();
+            if (lastCellText.includes('N/A')) return;
+
+            const slotId = getSlotIdFromCell(cells[0]);
+            if (slotId !== null && !slots.includes(slotId)) {
+                slots.push(slotId);
+            }
+        });
+
+        return slots.sort((a, b) => a - b);
+    }
+
     function renderCardsInsideDrawer(results) {
         const bodyEl = document.getElementById('noc-drawer-body-container');
         if (!bodyEl) return;
 
         let totalEventsCount = 0;
         let slotsWithOutages = 0;
+        let slotsWithErrors = 0;
 
         const cardsHtml = results.map(item => {
+            const isError = item.status === 'ERROR';
             const count = item.events.length;
-            totalEventsCount += count;
-            if (count > 0) slotsWithOutages++;
 
-            const statusBadge = count > 0
-                ? `<span class="noc-slot-badge noc-badge-alert">${count} caída(s)</span>`
-                : `<span class="noc-slot-badge noc-badge-ok">Estable</span>`;
+            if (isError) {
+                slotsWithErrors++;
+            } else {
+                totalEventsCount += count;
+                if (count > 0) slotsWithOutages++;
+            }
 
-            const eventsList = count > 0
-                ? `<div class="noc-events-list">
+            let statusBadge = '';
+            if (isError) {
+                statusBadge = `<span class="noc-slot-badge noc-badge-error">Fallo de lectura</span>`;
+            } else if (count > 0) {
+                statusBadge = `<span class="noc-slot-badge noc-badge-alert">${count} interrupción(es)</span>`;
+            } else {
+                statusBadge = `<span class="noc-slot-badge noc-badge-ok">Operativa</span>`;
+            }
+
+            let eventsList = '';
+            if (isError) {
+                eventsList = `<div style="font-size: 11px; color: var(--noc-yellow-text);">No fue posible obtener la telemetría del slot (${item.errorMsg || 'Tiempo agotado'}).</div>`;
+            } else if (count > 0) {
+                eventsList = `<div class="noc-events-list">
                     ${item.events.map(ev => `
                         <div class="noc-event-row">
                             <div class="noc-event-dates">
-                                <span style="color: var(--noc-red-text);">Caída: ${new Date(ev.start).toLocaleString('es-VE')}</span>
+                                <span style="color: var(--noc-red-text);">Inicio: ${formatDate(parseDateSafe(ev.start))}</span>
                                 <span style="color: ${ev.end ? 'var(--noc-green-text)' : 'var(--noc-red-text)'};">
-                                    ${ev.end ? `Recuperado: ${new Date(ev.end).toLocaleString('es-VE')}` : 'Estado: Actualmente Caído'}
+                                    ${ev.end ? `Restablecido: ${formatDate(parseDateSafe(ev.end))}` : 'Estado: Afectación en curso'}
                                 </span>
                             </div>
                             <span class="noc-event-badge-dur">${ev.duration}</span>
                         </div>
                     `).join('')}
-                   </div>`
-                : `<div style="font-size: 11px; color: var(--noc-text-dim);">Sin interrupciones a online = 0</div>`;
+                   </div>`;
+            } else {
+                eventsList = `<div style="font-size: 11px; color: var(--noc-text-dim);">Sin registros de pérdida de servicio (online = 0).</div>`;
+            }
 
             return `
                 <div class="noc-slot-card">
                     <div class="noc-card-header">
-                        <span class="noc-card-title">Tarjeta / Slot ${item.slotId}</span>
+                        <span class="noc-card-title">Slot ${item.slotId}</span>
                         ${statusBadge}
                     </div>
                     ${eventsList}
@@ -498,29 +624,32 @@
 
         bodyEl.innerHTML = `
             <div class="noc-summary-bar">
-                <span>Slots analizados: <strong>${results.length}</strong></span>
-                <span>Con incidencias: <strong style="color: var(--noc-red-text);">${slotsWithOutages}</strong></span>
-                <span>Total Caídas: <strong style="color: var(--noc-red-text);">${totalEventsCount}</strong></span>
+                <span>Tarjetas evaluadas: <strong>${results.length}</strong></span>
+                <span>Con afectación: <strong style="color: var(--noc-red-text);">${slotsWithOutages}</strong></span>
+                <span>Eventos registrados: <strong style="color: var(--noc-red-text);">${totalEventsCount}</strong></span>
+                ${slotsWithErrors > 0 ? `<span>Sin respuesta: <strong style="color: var(--noc-yellow-text);">${slotsWithErrors}</strong></span>` : ''}
             </div>
             ${cardsHtml}
         `;
     }
 
-    // Generar texto estructurado y copiar al portapapeles
     async function copyReportToClipboard() {
         if (!currentResults || currentResults.length === 0) return;
 
         const btnCopy = document.getElementById('btn-modal-copy-report');
         const oltName = getOltName();
         const oltId = getOltIdFromUrl();
-        const now = new Date().toLocaleString('es-VE');
+        const now = formatDate(new Date());
 
         let totalEvents = 0;
         const affectedSlots = [];
         const cleanSlots = [];
+        const errorSlots = [];
 
         currentResults.forEach(item => {
-            if (item.events.length > 0) {
+            if (item.status === 'ERROR') {
+                errorSlots.push(item.slotId);
+            } else if (item.events.length > 0) {
                 totalEvents += item.events.length;
                 affectedSlots.push(item);
             } else {
@@ -529,44 +658,45 @@
         });
 
         let txt = `=================================================================\n`;
-        txt += `   REPORTE DE INCIDENCIAS DE TARJETAS (ONLINE = 0) - NOC\n`;
+        txt += `   REPORTE DE ESTABILIDAD POR SLOTS (CAÍDAS MASIVAS) - NOC\n`;
         txt += `=================================================================\n`;
-        txt += `OLT:               ${oltName} (ID: ${oltId})\n`;
-        txt += `Fecha Generación:  ${now}\n`;
-        txt += `Slots Analizados:  ${currentResults.length}\n`;
-        txt += `Slots Afectados:   ${affectedSlots.length}\n`;
-        txt += `Total Caídas:      ${totalEvents}\n`;
+        txt += `Dispositivo:          ${oltName} (ID: ${oltId})\n`;
+        txt += `Fecha de emisión:     ${now}\n`;
+        txt += `Tarjetas auditadas:   ${currentResults.length}\n`;
+        txt += `Tarjetas afectadas:   ${affectedSlots.length}\n`;
+        txt += `Total interrupciones: ${totalEvents}\n`;
+        if (errorSlots.length > 0) {
+            txt += `Sin telemetría:       Slot(s) ${errorSlots.join(', ')}\n`;
+        }
         txt += `=================================================================\n\n`;
 
         if (affectedSlots.length > 0) {
-            txt += `[ DETALLE DE TARJETAS CON CAÍDAS ]\n`;
+            txt += `[ DETALLE DE INTERRUPCIONES DETECTADAS ]\n`;
             txt += `-----------------------------------------------------------------\n`;
             affectedSlots.forEach(item => {
                 txt += `\n* SLOT ${item.slotId} :: [${item.events.length} Evento(s)]\n`;
                 item.events.forEach((ev, idx) => {
-                    const start = new Date(ev.start).toLocaleString('es-VE');
-                    const end = ev.end ? new Date(ev.end).toLocaleString('es-VE') : 'En curso';
-                    txt += `  [#${idx + 1}] Caída: ${start} | Restablecido: ${end} | Duración: ${ev.duration}\n`;
+                    const start = formatDate(parseDateSafe(ev.start));
+                    const end = ev.end ? formatDate(parseDateSafe(ev.end)) : 'En curso';
+                    txt += `  [#${idx + 1}] Inicio: ${start} | Restablecido: ${end} | Duración: ${ev.duration}\n`;
                 });
             });
             txt += `\n-----------------------------------------------------------------\n`;
         } else {
-            txt += `[+] No se registraron caídas a cero en ningún slot de esta OLT.\n\n`;
+            txt += `[+] Sin eventos críticos detectados en las tarjetas evaluadas.\n\n`;
         }
 
         if (cleanSlots.length > 0) {
-            txt += `\n[ SLOTS ESTABLES / SIN CAÍDAS ]\n`;
+            txt += `\n[ TARJETAS OPERATIVAS / SIN CAÍDAS ]\n`;
             txt += `Slots: ${cleanSlots.join(', ')}\n`;
         }
 
         txt += `\n=================================================================\n`;
-        txt += `Generado automáticamente por InCa ACS BoardDetector\n`;
 
         try {
             if (navigator.clipboard && navigator.clipboard.writeText) {
                 await navigator.clipboard.writeText(txt);
             } else {
-                // Fallback para navegadores antiguos
                 const ta = document.createElement('textarea');
                 ta.value = txt;
                 ta.style.position = 'fixed';
@@ -579,44 +709,26 @@
 
             if (btnCopy) {
                 const originalHtml = btnCopy.innerHTML;
-                btnCopy.innerHTML = `<i class="fa fa-check" style="color: var(--noc-green-text);"></i> ¡Copiado!`;
+                btnCopy.innerHTML = `<i class="fa fa-check" style="color: var(--noc-green-text);"></i> Copiado`;
                 btnCopy.style.borderColor = 'var(--noc-green-text)';
                 setTimeout(() => {
                     btnCopy.innerHTML = originalHtml;
                     btnCopy.style.borderColor = 'var(--noc-border-subtle)';
-                }, 2200);
+                }, 2000);
             }
-        } catch (err) {
-            console.error('[NOC Monitor] Error copiando al portapapeles:', err);
-            alert('Error al copiar al portapapeles.');
+        } catch {
+            alert('No se pudo copiar el reporte al portapapeles.');
         }
     }
 
-    // Ejecutar consulta con Contador de Progreso
     async function executeQueryFromModal() {
         if (isFetching) return;
         const oltId = getOltIdFromUrl();
         const token = getToken();
         if (!oltId || !token) return;
 
-        const table = document.querySelector('table.olt-usage-details-datatable');
-        if (!table) return;
-
-        const rows = table.querySelectorAll('tbody tr');
-        const validSlots = [];
-
-        rows.forEach(row => {
-            const firstCell = row.querySelector('td:first-child');
-            const totalCell = row.querySelector('td:last-child');
-            if (!firstCell || !totalCell) return;
-
-            if (totalCell.textContent.trim().toUpperCase().includes('N/A')) return;
-
-            const slotText = firstCell.querySelector('.datatable-body-cell-label-inner')?.textContent?.trim()
-                          || firstCell.textContent.trim();
-            const slotId = parseInt(slotText, 10);
-            if (!isNaN(slotId)) validSlots.push(slotId);
-        });
+        const validSlots = extractActiveSlotsFromDOM();
+        if (validSlots.length === 0) return;
 
         const btnQuery = document.getElementById('btn-modal-query-action');
         const btnCopy = document.getElementById('btn-modal-copy-report');
@@ -626,11 +738,12 @@
         if (btnCopy) btnCopy.disabled = true;
 
         isFetching = true;
+        slotCache.clear();
 
         bodyEl.innerHTML = `
             <div class="noc-progress-container">
                 <div class="noc-progress-header">
-                    <span id="noc-progress-label">Iniciando consulta de slots...</span>
+                    <span id="noc-progress-label">Iniciando análisis de telemetría...</span>
                     <span id="noc-progress-pct">0%</span>
                 </div>
                 <div class="noc-progress-track">
@@ -639,18 +752,16 @@
             </div>
             <div class="noc-empty-placeholder" style="padding: 30px;">
                 <i class="fa fa-spinner fa-spin" style="color: var(--noc-blue-accent);"></i>
-                <span>Analizando tarjetas...</span>
+                <span>Consultando historial de tráfico...</span>
             </div>
         `;
 
         const total = validSlots.length;
         let completed = 0;
-        const results = [];
 
         try {
-            for (const slotId of validSlots) {
-                const events = await fetchSlotWithRetry(oltId, slotId, token);
-                results.push({ slotId, events });
+            const results = await runWorkerPool(validSlots, CONCURRENCY_LIMIT, async (slotId) => {
+                const res = await fetchSlotWithRetry(oltId, slotId, token, true);
                 completed++;
 
                 const pct = Math.round((completed / total) * 100);
@@ -658,15 +769,29 @@
                 const progressPct = document.getElementById('noc-progress-pct');
                 const progressBar = document.getElementById('noc-progress-fill-bar');
 
-                if (progressLabel) progressLabel.textContent = `Procesando: Slot ${slotId} (${completed} / ${total})`;
+                if (progressLabel) progressLabel.textContent = `Consultando Slot ${slotId} (${completed} de ${total})`;
                 if (progressPct) progressPct.textContent = `${pct}%`;
                 if (progressBar) progressBar.style.width = `${pct}%`;
-            }
 
-            results.sort((a, b) => b.events.length - a.events.length);
-            currentResults = results;
+                return {
+                    slotId,
+                    events: res.events,
+                    status: res.status,
+                    errorMsg: res.errorMsg
+                };
+            });
 
-            renderCardsInsideDrawer(results);
+            const filteredResults = results.filter(r => r && r.status !== 'UNAVAILABLE');
+
+            filteredResults.sort((a, b) => {
+                if (a.status === 'ERROR' && b.status !== 'ERROR') return -1;
+                if (b.status === 'ERROR' && a.status !== 'ERROR') return 1;
+                return b.events.length - a.events.length || a.slotId - b.slotId;
+            });
+
+            currentResults = filteredResults;
+
+            renderCardsInsideDrawer(filteredResults);
             syncTableBadges();
 
             if (btnCopy) btnCopy.disabled = false;
@@ -674,12 +799,11 @@
             isFetching = false;
             if (btnQuery) {
                 btnQuery.disabled = false;
-                btnQuery.innerHTML = `<i class="fa fa-refresh"></i> Actualizar Consulta`;
+                btnQuery.innerHTML = `<i class="fa fa-refresh"></i> Actualizar Datos`;
             }
         }
     }
 
-    // Abrir menú lateral flotante de inmediato
     function openDrawerImmediate() {
         const existing = document.getElementById('noc-drawer-overlay-root');
         if (existing) {
@@ -696,22 +820,22 @@
                 <div class="noc-drawer-header">
                     <div class="noc-drawer-title">
                         <i class="fa fa-server" style="color: var(--noc-blue-accent);"></i>
-                        Auditoría de Caídas (Online = 0)
+                        Auditoría de Estabilidad por Slot
                     </div>
                     <button class="noc-drawer-close" id="btn-close-noc-drawer">&times;</button>
                 </div>
                 <div class="noc-drawer-toolbar">
                     <button class="btn-modal-action" id="btn-modal-query-action">
-                        <i class="fa fa-search"></i> Consultar Caídas
+                        <i class="fa fa-search"></i> Consultar Telemetría
                     </button>
-                    <button class="btn-modal-copy" id="btn-modal-copy-report" disabled title="Disponible tras consultar">
+                    <button class="btn-modal-copy" id="btn-modal-copy-report" disabled title="Disponible tras completar la consulta">
                         <i class="fa fa-clipboard"></i> Copiar Reporte
                     </button>
                 </div>
                 <div class="noc-drawer-body" id="noc-drawer-body-container">
                     <div class="noc-empty-placeholder">
                         <i class="fa fa-line-chart"></i>
-                        <span>Presiona <strong>"Consultar Caídas"</strong> para iniciar el análisis con reintento automático.</span>
+                        <span>Seleccione <strong>"Consultar Telemetría"</strong> para auditar las tarjetas activas de esta OLT y verificar eventos de pérdida total de abonados (online = 0).</span>
                     </div>
                 </div>
             </div>
@@ -719,7 +843,6 @@
 
         document.body.appendChild(overlay);
 
-        // Eventos
         document.getElementById('btn-modal-query-action').onclick = executeQueryFromModal;
         document.getElementById('btn-modal-copy-report').onclick = copyReportToClipboard;
 
@@ -736,47 +859,50 @@
         document.addEventListener('keydown', escListener);
     }
 
-    // Sincronizar badges pequeños en la tabla de slots
     function syncTableBadges() {
         const table = document.querySelector('table.olt-usage-details-datatable');
         if (!table) return;
 
         const rows = table.querySelectorAll('tbody tr');
         rows.forEach(row => {
-            const firstCell = row.querySelector('td:first-child');
-            const totalCell = row.querySelector('td:last-child');
-            if (!firstCell || !totalCell) return;
+            const cells = row.querySelectorAll('td');
+            if (cells.length < 2) return;
 
+            const totalCell = cells[cells.length - 1];
             if (totalCell.textContent.trim().toUpperCase().includes('N/A')) return;
 
-            const slotText = firstCell.querySelector('.datatable-body-cell-label-inner')?.textContent?.trim()
-                          || firstCell.textContent.trim();
-            const slotId = parseInt(slotText, 10);
+            const slotId = getSlotIdFromCell(cells[0]);
+            if (slotId === null || !slotCache.has(slotId)) return;
 
-            if (!isNaN(slotId) && slotCache.has(slotId)) {
-                const events = slotCache.get(slotId);
-                const innerP = totalCell.querySelector('p.datatable-body-cell-label-inner');
-                if (!innerP) return;
+            const data = slotCache.get(slotId);
+            if (data.status === 'UNAVAILABLE') return;
 
-                let badge = innerP.querySelector('.noc-slot-badge');
-                if (!badge) {
-                    badge = document.createElement('span');
-                    innerP.appendChild(badge);
-                }
+            const container = totalCell.querySelector('p.datatable-body-cell-label-inner') || totalCell;
 
-                const count = events.length;
+            let badge = container.querySelector('.noc-slot-badge');
+            if (!badge) {
+                badge = document.createElement('span');
+                container.appendChild(badge);
+            }
+
+            if (data.status === 'ERROR') {
+                badge.className = 'noc-slot-badge noc-badge-error';
+                badge.textContent = '!';
+                badge.title = `Slot ${slotId}: Error de comunicación. Clic para ver detalles.`;
+            } else {
+                const count = data.events.length;
                 badge.className = `noc-slot-badge ${count > 0 ? 'noc-badge-alert' : 'noc-badge-ok'}`;
                 badge.textContent = count;
-                badge.title = `Slot ${slotId}: ${count} evento(s). Clic para abrir auditoría.`;
-                badge.onclick = (e) => {
-                    e.stopPropagation();
-                    openDrawerImmediate();
-                };
+                badge.title = `Slot ${slotId}: ${count} evento(s) registrado(s). Clic para abrir auditoría.`;
             }
+
+            badge.onclick = (e) => {
+                e.stopPropagation();
+                openDrawerImmediate();
+            };
         });
     }
 
-    // Inyectar botón disparador en la cabecera
     function injectTriggerButton() {
         if (document.getElementById('btn-trigger-noc-drawer')) return;
 
@@ -786,7 +912,7 @@
         const button = document.createElement('button');
         button.id = 'btn-trigger-noc-drawer';
         button.className = 'btn-audit-trigger';
-        button.innerHTML = `<i class="fa fa-list-alt"></i> Auditar Caídas de Slots`;
+        button.innerHTML = `<i class="fa fa-list-alt"></i> Auditoría de Tarjetas`;
         button.onclick = (e) => {
             e.preventDefault();
             openDrawerImmediate();
@@ -795,7 +921,6 @@
         subtitleContainer.appendChild(button);
     }
 
-    // Verificación de la vista
     function processView() {
         const oltId = getOltIdFromUrl();
         const token = getToken();
@@ -803,7 +928,6 @@
 
         injectTriggerButton();
 
-        // Si cambió de OLT
         if (currentOltId !== oltId) {
             currentOltId = oltId;
             lastTelemetryTimestamp = null;
@@ -814,7 +938,6 @@
             if (drawerOverlay) drawerOverlay.remove();
         }
 
-        // Si se actualizó la fecha de telemetría en la misma OLT
         const timestampEl = document.querySelector('.blockpanel-title span.label-primary.pull-right');
         if (timestampEl) {
             const currentTs = timestampEl.textContent.trim();
@@ -828,7 +951,6 @@
         syncTableBadges();
     }
 
-    // Escucha SPA Router
     const handleUrlChange = () => setTimeout(processView, 200);
     window.addEventListener('popstate', handleUrlChange);
 
@@ -844,7 +966,6 @@
         handleUrlChange();
     };
 
-    // Observer reactivo
     let timer = null;
     const observer = new MutationObserver(() => {
         if (timer) clearTimeout(timer);
