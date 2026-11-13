@@ -3,50 +3,80 @@
 // @namespace    Violentmonkey Scripts
 // @match        *://190.153.58.82/fttx/todo*
 // @grant        none
-// @version      2.3
+// @version      2.4
 // @author       Ing. Adrian Leon
 // @updateURL    https://raw.githubusercontent.com/TakRiuto/ACSScripts/release/MultiTODO.user.js
 // @downloadURL  https://raw.githubusercontent.com/TakRiuto/ACSScripts/release/MultiTODO.user.js
 // @icon         https://avatars.githubusercontent.com/u/20828447?v=4
 // ==/UserScript==
 
-(function() {
+(function () {
     'use strict';
 
     const esperar = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
-    function esperarQuePaceTermine() {
+    function esperarPaceInactivo() {
         return new Promise((resolve) => {
             const paceDiv = document.querySelector('.pace');
             if (!paceDiv || paceDiv.classList.contains('pace-inactive')) {
-                setTimeout(resolve, 600);
+                resolve();
                 return;
             }
+
+            let resuelto = false;
+            let fallbackTimer = null;
+
+            const finalizar = () => {
+                if (resuelto) return;
+                resuelto = true;
+                observador.disconnect();
+                if (fallbackTimer) clearTimeout(fallbackTimer);
+                resolve();
+            };
+
             const observador = new MutationObserver(() => {
                 if (paceDiv.classList.contains('pace-inactive')) {
-                    observador.disconnect();
-                    setTimeout(resolve, 600);
+                    finalizar();
                 }
             });
+
             observador.observe(paceDiv, { attributes: true, attributeFilter: ['class'] });
-            setTimeout(() => { observador.disconnect(); resolve(); }, 8000);
+            fallbackTimer = setTimeout(finalizar, 8000);
         });
     }
 
-    function presentarResultados(filas, paginas, cancelado) {
-        const tablaOriginal = document.querySelector('.table-container table');
-        const thead = tablaOriginal.querySelector('thead').outerHTML;
-        document.querySelector('.table-container').style.display = 'none';
+    async function esperarCambioDePagina(prevSnapshot) {
+        // Pequeño respiro para que Angular/Pace inicien la transición tras el clic
+        await esperar(60);
+        await esperarPaceInactivo();
 
+        const inicio = Date.now();
+        while (Date.now() - inicio < 2500) {
+            const tbody = document.querySelector('.table-container table tbody');
+            if (tbody && tbody.textContent !== prevSnapshot) break;
+            await esperar(80);
+        }
+
+        await esperar(150);
+    }
+
+    function presentarResultados(filas, paginas, cancelado) {
+        const tableContainer = document.querySelector('.table-container');
+        const tablaOriginal = tableContainer?.querySelector('table');
         const resultadosDiv = document.getElementById('vm-resultados-totales');
+        if (!tableContainer || !tablaOriginal || !resultadosDiv) return;
+
+        const thead = tablaOriginal.querySelector('thead')?.outerHTML || '';
+        const colCount = tablaOriginal.querySelectorAll('thead th').length || 20;
+        tableContainer.style.display = 'none';
         resultadosDiv.style.display = 'block';
 
         const alertColor = cancelado
             ? 'background:#fcf8e3; color:#8a6d3b; border:1px solid #faebcc;'
             : 'background:#d9edf7; color:#31708f; border:1px solid #bce8f1;';
         const alertMsg = cancelado
-            ? `⚠️ <b>Escaneo cancelado.</b> Se encontraron <b>${filas.length}</b> coincidencias en <b>${paginas}</b> páginas escaneadas.`
-            : `✅ <b>Escaneo finalizado:</b> Se encontraron <b>${filas.length}</b> coincidencias en <b>${paginas}</b> páginas.`;
+            ? `⚠️ <b>Escaneo cancelado.</b> Se encontraron <b>${filas.length}</b> coincidencias en <b>${paginas}</b> página(s) escaneada(s).`
+            : `✅ <b>Escaneo finalizado:</b> Se encontraron <b>${filas.length}</b> coincidencias en <b>${paginas}</b> página(s).`;
 
         resultadosDiv.innerHTML = `
             <div class="alert" style="${alertColor} padding:15px; border-radius:4px; margin-bottom:20px;">
@@ -56,20 +86,27 @@
                 ${thead}
                 <tbody>${filas.length > 0
                     ? filas.join('')
-                    : '<tr><td colspan="20" class="text-center">No se encontraron seriales en ninguna página.</td></tr>'
+                    : `<tr><td colspan="${colCount}" class="text-center">No se encontraron seriales en ninguna página.</td></tr>`
                 }</tbody>
             </table>
         `;
     }
 
+    let intentosInyeccion = 0;
+
     function inyectarPanel() {
         if (document.getElementById('vm-custom-filter')) return;
         const tableContainer = document.querySelector('.table-container');
-        if (!tableContainer) { setTimeout(inyectarPanel, 2000); return; }
+        if (!tableContainer) {
+            if (intentosInyeccion++ < 30 && window.location.pathname.includes('/fttx/todo')) {
+                setTimeout(inyectarPanel, 1000);
+            }
+            return;
+        }
 
         const panel = document.createElement('div');
         panel.id = 'vm-custom-filter';
-        panel.style.cssText = `background:#f8f9fa; border:1px solid #e7eaec; padding:15px; margin-bottom:15px; border-radius:3px; display:flex; gap:15px; align-items:flex-start;`;
+        panel.style.cssText = 'background:#f8f9fa; border:1px solid #e7eaec; padding:15px; margin-bottom:15px; border-radius:3px; display:flex; gap:15px; align-items:flex-start;';
         panel.innerHTML = `
             <div style="flex-grow: 1;">
                 <label style="font-weight:600; font-size:13px;">Buscador Múltiple (Seriales):</label>
@@ -88,15 +125,23 @@
         tableContainer.parentNode.insertBefore(panel, tableContainer);
         tableContainer.parentNode.insertBefore(resultadosDiv, tableContainer);
 
-        // --- ESCANEO ---
+        const btnEscanear = document.getElementById('vm-btn-escanear');
+        const btnLimpiar = document.getElementById('vm-btn-limpiar');
         let cancelado = false;
 
-        document.getElementById('vm-btn-escanear').addEventListener('click', async function() {
+        btnEscanear.addEventListener('click', async function () {
             const inputVal = document.getElementById('vm-seriales-input').value;
-            const seriales = inputVal.split(/[\n, ]+/).map(s => s.trim().toUpperCase()).filter(s => s.length > 0);
-            if (seriales.length === 0) return alert("Ingresa seriales.");
+            const seriales = Array.from(new Set(
+                inputVal.split(/[\s,;]+/).map(s => s.trim().toUpperCase()).filter(s => s.length > 0)
+            ));
+            if (seriales.length === 0) return alert('Ingresa seriales.');
 
             cancelado = false;
+            btnEscanear.disabled = true;
+
+            // Mostrar tabla original mientras escanea por si venía de resultados previos
+            tableContainer.style.display = 'block';
+            resultadosDiv.style.display = 'none';
 
             const overlay = document.createElement('div');
             overlay.id = 'vm-overlay';
@@ -112,58 +157,75 @@
             document.body.appendChild(overlay);
             document.getElementById('vm-overlay-cancel').onclick = () => { cancelado = true; };
 
+            const progressText = document.getElementById('vm-progress');
+            const progressBar = document.getElementById('vm-progress-bar');
+
             const filasEncontradasHTML = [];
-            let paginaActual = 1;
+            const filasVistas = new Set();
+            let paginasEscaneadas = 0;
 
             try {
-                while (true) {
-                    if (cancelado) break;
+                // Si la tabla no está en la página 1, rebobinar antes de escanear
+                const btnBack = document.querySelector('i.fa-fast-backward')?.closest('button');
+                if (btnBack && !btnBack.disabled) {
+                    progressText.textContent = 'Volviendo a la página 1...';
+                    const prevSnapshot = document.querySelector('.table-container table tbody')?.textContent || '';
+                    btnBack.click();
+                    await esperarCambioDePagina(prevSnapshot);
+                }
 
-                    document.querySelectorAll('.table-container table tbody tr').forEach(f => {
+                while (!cancelado) {
+                    const tbody = document.querySelector('.table-container table tbody');
+                    const rows = tbody ? tbody.querySelectorAll('tr') : [];
+
+                    rows.forEach(f => {
                         const t = f.textContent.toUpperCase();
-                        if (seriales.some(s => t.includes(s))) filasEncontradasHTML.push(f.outerHTML);
+                        if (seriales.some(s => t.includes(s))) {
+                            const html = f.outerHTML;
+                            if (!filasVistas.has(html)) {
+                                filasVistas.add(html);
+                                filasEncontradasHTML.push(html);
+                            }
+                        }
                     });
 
+                    paginasEscaneadas++;
+                    progressText.textContent = `Página ${paginasEscaneadas} — Coincidencias: ${filasEncontradasHTML.length}`;
+                    const pct = ((paginasEscaneadas - 1) % 10 + 1) * 10;
+                    progressBar.style.width = `${pct}%`;
+
                     const btnNext = document.querySelector('i.fa-chevron-right')?.closest('button');
-                    if (!btnNext || btnNext.disabled || btnNext.classList.contains('disabled')) break;
+                    if (!btnNext || btnNext.disabled || btnNext.classList.contains('disabled') || cancelado) break;
 
+                    const prevSnapshot = tbody ? tbody.textContent : '';
                     btnNext.click();
-                    paginaActual++;
-
-                    document.getElementById('vm-progress').innerText = `Página ${paginaActual} — Coincidencias: ${filasEncontradasHTML.length}`;
-                    // Animar barra indeterminada (no sabemos total de páginas)
-                    const pct = (paginaActual % 10) * 10;
-                    document.getElementById('vm-progress-bar').style.width = `${pct}%`;
-
-                    await esperarQuePaceTermine();
-                    // Sin delay adicional — pace ya garantiza que cargó
+                    await esperarCambioDePagina(prevSnapshot);
                 }
-            } catch(e) {
+            } catch (e) {
                 console.error('Error durante escaneo:', e);
-                // Avisar al usuario si algo falló inesperadamente
-                document.getElementById('vm-progress').innerText = `⚠️ Error en página ${paginaActual}: ${e.message}`;
+                progressText.textContent = `⚠️ Error en página ${paginasEscaneadas + 1}: ${e.message}`;
                 await esperar(3000);
             } finally {
-                if (document.body.contains(overlay)) document.body.removeChild(overlay);
+                overlay.remove();
+                btnEscanear.disabled = false;
             }
 
-            presentarResultados(filasEncontradasHTML, paginaActual, cancelado);
+            presentarResultados(filasEncontradasHTML, paginasEscaneadas, cancelado);
             cancelado = false;
         });
 
-        // --- RESET ---
-        document.getElementById('vm-btn-limpiar').addEventListener('click', async function() {
+        btnLimpiar.addEventListener('click', async function () {
             cancelado = true;
-            document.querySelector('.table-container').style.display = 'block';
-            const resultadosDiv = document.getElementById('vm-resultados-totales');
+            tableContainer.style.display = 'block';
             resultadosDiv.style.display = 'none';
             resultadosDiv.innerHTML = '';
             document.getElementById('vm-seriales-input').value = '';
 
             const btnBack = document.querySelector('i.fa-fast-backward')?.closest('button');
             if (btnBack && !btnBack.disabled) {
+                const prevSnapshot = document.querySelector('.table-container table tbody')?.textContent || '';
                 btnBack.click();
-                await esperarQuePaceTermine();
+                await esperarCambioDePagina(prevSnapshot);
             }
             const btnRefresh = document.querySelector('i.fa-refresh')?.closest('button');
             if (btnRefresh) btnRefresh.click();
