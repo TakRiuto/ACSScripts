@@ -2,20 +2,27 @@
 // @name         OLT Monitor Maestro
 // @namespace    Violentmonkey Scripts
 // @match        *://190.153.58.82/monitoring/olt/*
-// @version      16.6
-// @inject-into  content
+// @version      16.7
 // @run-at       document-end
 // @author       Ing. Adrian Leon
 // @updateURL    https://raw.githubusercontent.com/TakRiuto/ACSScripts/release/Monitor.user.js
 // @downloadURL  https://raw.githubusercontent.com/TakRiuto/ACSScripts/release/Monitor.user.js
-// @grant        GM_fetch
-// @connect      raw.githubusercontent.com
+// @grant        none
 // @icon         https://avatars.githubusercontent.com/u/20828447?v=4
 // ==/UserScript==
 
-(async function() {
+(async function () {
     'use strict';
     if (window.self !== window.top) return;
+
+    function escapeHtml(value) {
+        return String(value ?? '')
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+    }
 
     // =========================================================
     // DB
@@ -23,11 +30,9 @@
     let DB_NODOS = {};
     let dbCargada = true;
     try {
-        DB_NODOS = await fetch(`https://raw.githubusercontent.com/TakRiuto/ACSScripts/refs/heads/release/nodos.json?t=${Date.now()}`)
-            .then(r => {
-                if (!r.ok) throw new Error(`HTTP ${r.status}`);
-                return r.json();
-            });
+        const resp = await fetch(`https://raw.githubusercontent.com/TakRiuto/ACSScripts/refs/heads/release/nodos.json?t=${Date.now()}`);
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        DB_NODOS = await resp.json();
         console.log('✅ DB_NODOS cargado:', Object.keys(DB_NODOS).length, 'nodos');
     } catch (e) {
         console.error('❌ Error cargando nodos.json:', e);
@@ -38,120 +43,198 @@
     // ESTADO
     // =========================================================
     const resultadosRCA = new Map();
+    const RCA_TIMEOUT_MS = 10000;
+    const RCA_VALIDAS = new Set(['LOS', 'LOSi', 'LOFi', 'link-down']);
     const CAUSAS_CONOCIDAS = {
         'dying-gasp': { titulo: 'Pérdida de alimentación eléctrica', icono: '⚡' },
-        'LOS': { titulo: 'Loss of Signal — Pérdida de señal óptica', icono: '🔴' },
-        'LOSi': { titulo: 'Loss of Signal — Pérdida de señal óptica (intermitente)', icono: '🟡' },
-        'power-off': { titulo: 'Apagado de equipo', icono: '🔌' },
-        'link-down': { titulo: 'Enlace caído', icono: '🔗' },
-        'deactive': { titulo: 'Falso positivo (deuda/desconexión adm.)', icono: '💡' },
-        'LOFi': { titulo: 'Loss of Frame — Pérdida de trama', icono: '🔗' },
-        'SUSPENDED': { titulo: 'Suspendido (Admin)', icono: '🚫' },
-        'OTHER': { titulo: 'Falla Desconocida', icono: '❓' }
+        'LOS':        { titulo: 'Loss of Signal — Pérdida de señal óptica', icono: '🔴' },
+        'LOSi':       { titulo: 'Loss of Signal — Pérdida de señal óptica (intermitente)', icono: '🟡' },
+        'power-off':  { titulo: 'Apagado de equipo', icono: '🔌' },
+        'link-down':  { titulo: 'Enlace caído', icono: '🔗' },
+        'deactive':   { titulo: 'Falso positivo (deuda/desconexión adm.)', icono: '💡' },
+        'LOFi':       { titulo: 'Loss of Frame — Pérdida de trama', icono: '🔗' },
+        'SUSPENDED':  { titulo: 'Suspendido (Admin)', icono: '🚫' },
+        'OTHER':      { titulo: 'Falla Desconocida', icono: '❓' }
     };
 
+    let oltActual = '';
+    let oltSessionId = 0;
+    let oltAbortController = new AbortController();
+    let modoCargaInicial = true;
+
+    const savedUmbral = parseFloat(localStorage.getItem('oltUmbralValor'));
+    let umbralValor = Number.isFinite(savedUmbral) && savedUmbral >= 1 ? savedUmbral : 30;
+    let umbralTipo = localStorage.getItem('oltUmbralTipo') || 'porcentaje';
+    let filtroOp = localStorage.getItem('oltFiltroOp') || 'TODOS';
+    let logBusqueda = '';
+    let escala = parseFloat(localStorage.getItem('oltPanelEscala')) || 1;
+    let panelState = 'minimizado';
+    let modoPreferido = localStorage.getItem('oltModoPreferido') || 'abierto';
+
+    let ultimoHTMLRenderizado = '';
+    let ultimoEstadoPestana = { oltName: '', criticos: -1, hayNuevos: null };
+    let cachedToken = '';
+
+    const registroNodos = new Map();
+    const memoriaRedGlobal = new Map();
+
     function _oltNormCausa(raw) {
-        if (!raw || raw === "-") return null;
+        if (!raw || raw === '-') return null;
         const k = raw.trim();
-        if (k === "LOBi" || k === "LOSi/LOBi" || k === "LOBi/LOSi" || k.includes("LOSi")) return "LOSi";
-        if (k.toUpperCase() === "LOFI") return "LOFi";
+        if (k === 'LOBi' || k === 'LOSi/LOBi' || k === 'LOBi/LOSi' || k.includes('LOSi')) return 'LOSi';
+        if (k.toUpperCase() === 'LOFI') return 'LOFi';
         return k;
     }
 
-    function obtenerTokenAcs() {
-        const storages = [localStorage, sessionStorage];
-        for (let storage of storages) {
+    function obtenerTokenAcs(forceRefresh = false) {
+        if (cachedToken && !forceRefresh) return cachedToken;
+
+        // Camino rápido (ACS estándar)
+        try {
+            const rawUser = localStorage.getItem('currentUser');
+            if (rawUser) {
+                const tokenId = JSON.parse(rawUser)?.token?.id;
+                if (typeof tokenId === 'string' && tokenId.length > 0) {
+                    cachedToken = tokenId;
+                    return cachedToken;
+                }
+            }
+        } catch {}
+
+        const isJwt = (v) => typeof v === 'string' && v.startsWith('eyJ') && v.split('.').length >= 3;
+
+        const traverse = (obj, depth = 0) => {
+            if (!obj || typeof obj !== 'object' || depth > 6) return null;
+            for (const val of Object.values(obj)) {
+                if (isJwt(val)) return val;
+                if (val && typeof val === 'object') {
+                    const found = traverse(val, depth + 1);
+                    if (found) return found;
+                }
+            }
+            return null;
+        };
+
+        for (const storage of [localStorage, sessionStorage]) {
             for (let i = 0; i < storage.length; i++) {
-                let key = storage.key(i);
-                let val = storage.getItem(key);
+                const val = storage.getItem(storage.key(i));
                 if (!val) continue;
-
-                // Si es un JWT puro en el storage
-                if (val.startsWith('eyJ') && val.split('.').length >= 3) return val;
-
-                // Si está dentro de un JSON (ngStorage, redux, etc.)
+                if (isJwt(val)) { cachedToken = val; return cachedToken; }
                 if (val.includes('eyJ')) {
                     try {
-                        let parsed = JSON.parse(val);
-                        // Exploración profunda para encontrar cualquier string JWT
-                        const traverse = (obj) => {
-                            for (let k in obj) {
-                                if (typeof obj[k] === 'string' && obj[k].startsWith('eyJ') && obj[k].split('.').length >= 3) {
-                                    return obj[k];
-                                } else if (typeof obj[k] === 'object' && obj[k] !== null) {
-                                    const found = traverse(obj[k]);
-                                    if (found) return found;
-                                }
-                            }
-                            return null;
-                        };
-                        const found = traverse(parsed);
-                        if (found) return found;
-                    } catch(e) {}
+                        const found = traverse(JSON.parse(val));
+                        if (found) { cachedToken = found; return cachedToken; }
+                    } catch {}
                 }
             }
         }
 
-        // Buscar en cookies por si acaso
-        const cookies = document.cookie.split(';');
-        for (let c of cookies) {
-            let val = c.trim().split('=')[1];
-            if (val && val.startsWith('eyJ') && val.split('.').length >= 3) return val;
+        for (const c of document.cookie.split(';')) {
+            const eqIdx = c.indexOf('=');
+            if (eqIdx === -1) continue;
+            const val = c.slice(eqIdx + 1).trim();
+            if (isJwt(val)) { cachedToken = val; return cachedToken; }
         }
 
+        cachedToken = '';
         return '';
     }
 
-    async function ejecutarRCA(idNodo, oltId, slotId, portId) {
+    async function ejecutarRCA(idNodo, oltId, slotId, portId, offSnap, onSnap) {
         if (!oltId) return;
+
+        const sessionId = oltSessionId;
         const token = obtenerTokenAcs();
 
-        resultadosRCA.set(idNodo, { status: 'loading', text: '⏳ Analizando causa raíz...', ts: Date.now() });
+        resultadosRCA.set(idNodo, {
+            status: 'loading',
+            msg: '⏳ Analizando causa raíz...',
+            off: offSnap,
+            on: onSnap,
+            ts: Date.now()
+        });
 
         if (!token) {
-            resultadosRCA.set(idNodo, { status: 'error', text: '🔑 Sin Token de Auth para RCA', ts: Date.now() });
+            resultadosRCA.set(idNodo, {
+                status: 'error',
+                msg: '🔑 Sin Token de Auth para RCA',
+                off: offSnap,
+                on: onSnap,
+                ts: Date.now()
+            });
             return;
         }
 
+        const reqController = new AbortController();
+        const onOltAbort = () => reqController.abort();
+        oltAbortController.signal.addEventListener('abort', onOltAbort, { once: true });
+        const timeoutTimer = setTimeout(() => reqController.abort(), RCA_TIMEOUT_MS);
+
         try {
             const filterObj = {
-                "skip": 0, "limit": 100,
-                "where": {"and": [{"slotId": slotId.toString()}, {"portId": portId.toString()}, {"generalStatus": "OFFLINE"}]}
+                skip: 0,
+                limit: 100,
+                where: {
+                    and: [
+                        { slotId: slotId.toString() },
+                        { portId: portId.toString() },
+                        { generalStatus: 'OFFLINE' }
+                    ]
+                }
             };
             const filter = encodeURIComponent(JSON.stringify(filterObj));
-            const url = `https://${window.location.host}/api/fttx/olts/${oltId}/active-devices?filter=${filter}`;
+            const url = `${window.location.origin}/api/fttx/olts/${oltId}/active-devices?filter=${filter}`;
 
             const res = await fetch(url, {
                 headers: {
-                    "accept": "application/json",
-                    "x-access-token": token
-                }
+                    'accept': 'application/json',
+                    'x-access-token': token
+                },
+                signal: reqController.signal
             });
 
+            if (sessionId !== oltSessionId) return;
+
+            if (res.status === 401 || res.status === 403) {
+                cachedToken = '';
+                throw new Error(`Auth HTTP ${res.status}`);
+            }
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
             const data = await res.json();
+            if (sessionId !== oltSessionId) return;
 
             if (!Array.isArray(data) || data.length === 0) {
-                resultadosRCA.set(idNodo, { status: 'done', text: '🦕 Sin reporte de falla en OLT', ts: Date.now() });
+                resultadosRCA.set(idNodo, {
+                    status: 'done',
+                    msg: '🦕 Sin reporte de falla en OLT',
+                    off: offSnap,
+                    on: onSnap,
+                    ts: Date.now()
+                });
                 return;
             }
 
             const causasCount = {};
             let validCount = 0;
 
-            data.forEach(ont => {
-                let causa = (ont.lastDownCause && ont.lastDownCause.trim() !== '-') ? ont.lastDownCause.trim() : null;
-
-                causa = _oltNormCausa(causa);
-
+            for (const ont of data) {
+                const raw = (ont.lastDownCause && ont.lastDownCause.trim() !== '-') ? ont.lastDownCause.trim() : null;
+                const causa = _oltNormCausa(raw);
                 if (causa) {
                     causasCount[causa] = (causasCount[causa] || 0) + 1;
                     validCount++;
                 }
-            });
+            }
 
             if (validCount === 0) {
-                resultadosRCA.set(idNodo, { status: 'done', text: '🦕 Caída sin diagnóstico', ts: Date.now() });
+                resultadosRCA.set(idNodo, {
+                    status: 'done',
+                    msg: '🦕 Caída sin diagnóstico',
+                    off: offSnap,
+                    on: onSnap,
+                    ts: Date.now()
+                });
                 return;
             }
 
@@ -164,7 +247,7 @@
             const pct = Math.round((max / validCount) * 100);
             const info = CAUSAS_CONOCIDAS[dominante] || { titulo: dominante, icono: '⚠️' };
 
-            let desglose = "";
+            let desglose = '';
             if (Object.keys(causasCount).length > 1) {
                 const porcentajes = {};
                 const restos = [];
@@ -177,7 +260,7 @@
                     restos.push({ mot, resto: pctExacto - pctEntero });
                 }
                 restos.sort((a, b) => b.resto - a.resto);
-                let faltante = 100 - suma;
+                const faltante = 100 - suma;
                 for (let i = 0; i < faltante; i++) {
                     porcentajes[restos[i].mot]++;
                 }
@@ -185,116 +268,142 @@
                 for (const [mot, pctVal] of Object.entries(porcentajes)) {
                     if (pctVal > 0) partes.push(`${mot}: ${pctVal}%`);
                 }
-                desglose = partes.join(" · ");
+                desglose = partes.join(' · ');
             }
 
             resultadosRCA.set(idNodo, {
                 status: 'done',
-                dominante: dominante,
-                text: `${info.icono} RCA: ${info.titulo} (${pct}%)${desglose ? ` <br><span style="font-size:9px;color:#ccc;display:block;margin-top:2px;">[ ${desglose} ]</span>` : ''}`,
+                dominante,
+                msg: `${info.icono} RCA: ${info.titulo} (${pct}%)`,
+                desglose,
+                off: offSnap,
+                on: onSnap,
                 ts: Date.now()
             });
-
         } catch (e) {
-            console.error("Error en RCA para", idNodo, e);
-            resultadosRCA.set(idNodo, { status: 'error', text: '❌ Falla comunicación RCA', ts: Date.now() });
+            if (sessionId !== oltSessionId) return;
+            console.error('Error en RCA para', idNodo, e);
+            resultadosRCA.set(idNodo, {
+                status: 'error',
+                msg: e.name === 'AbortError' ? '⏱️ Timeout en consulta RCA' : '❌ Falla comunicación RCA',
+                off: offSnap,
+                on: onSnap,
+                ts: Date.now()
+            });
+        } finally {
+            clearTimeout(timeoutTimer);
+            oltAbortController.signal.removeEventListener('abort', onOltAbort);
         }
     }
 
-    let oltActual = "";
-    let modoCargaInicial = true;
-    let umbralValor = parseFloat(localStorage.getItem('oltUmbralValor')) || 30;
-    let umbralTipo = localStorage.getItem('oltUmbralTipo') || 'porcentaje';
-    let filtroOp = localStorage.getItem('oltFiltroOp') || 'TODOS';
-    let logBusqueda = '';
-    let escala = parseFloat(localStorage.getItem('oltPanelEscala')) || 1;
-    let panelState = 'minimizado';
-    let modoPreferido = localStorage.getItem('oltModoPreferido') || 'abierto';
-
-    let ultimoHTMLRenderizado = '';
-    let ultimoEstadoPestana = { criticos: -1, hayNuevos: null };
-
-    const registroNodos = new Map();
-    const memoriaRedGlobal = new Map();
+    function renderRcaHtml(rcaData) {
+        if (!rcaData) return '';
+        const mainText = escapeHtml(rcaData.msg || '');
+        const subText = rcaData.desglose
+            ? `<br><span style="font-size:9px;color:#ccc;display:block;margin-top:2px;">[ ${escapeHtml(rcaData.desglose)} ]</span>`
+            : '';
+        return `<div style="margin-top:4px;font-size:11px;color:#f1c40f;background:rgba(0,0,0,0.2);padding:4px 6px;border-radius:4px;display:inline-block;letter-spacing:0.3px;">${mainText}${subText}</div>`;
+    }
 
     // =========================================================
     // AUDIO
     // =========================================================
-    const AUDIOS = {
-        dosimeter:    new Audio('https://actions.google.com/sounds/v1/alarms/dosimeter_alarm.ogg'),
-        alarm:        new Audio('https://www.myinstants.com/media/sounds/alarm.MP3'),
-        alarmabrazil: new Audio('https://www.myinstants.com/media/sounds/brazil-alarm.mp3'),
-        alarmhard:    new Audio('https://www.myinstants.com/media/sounds/chicken-on-tree-screaming.mp3'),
-        chevette99:   new Audio('https://soundbible.com/grab.php?id=2214&type=mp3')
+    const AUDIO_URLS = {
+        dosimeter:    'https://actions.google.com/sounds/v1/alarms/dosimeter_alarm.ogg',
+        alarm:        'https://www.myinstants.com/media/sounds/alarm.MP3',
+        alarmabrazil: 'https://www.myinstants.com/media/sounds/brazil-alarm.mp3',
+        alarmhard:    'https://www.myinstants.com/media/sounds/chicken-on-tree-screaming.mp3',
+        chevette99:   'https://soundbible.com/grab.php?id=2214&type=mp3'
     };
-    Object.values(AUDIOS).forEach(a => { a.preload = 'auto'; a.loop = true; });
+    const AUDIOS = {};
+    function getAudio(key) {
+        const validKey = key in AUDIO_URLS ? key : 'dosimeter';
+        if (!AUDIOS[validKey]) {
+            const a = new Audio(AUDIO_URLS[validKey]);
+            a.preload = 'auto';
+            a.loop = true;
+            AUDIOS[validKey] = a;
+        }
+        return AUDIOS[validKey];
+    }
 
     const alarmaGuardada = localStorage.getItem('oltAlarmaSeleccionada') || 'dosimeter';
-    let sonidoAlerta = AUDIOS[alarmaGuardada] || AUDIOS.alarm;
+    let sonidoAlerta = getAudio(alarmaGuardada);
 
     let silenciado = false;
     let muteGlobal = localStorage.getItem('oltMuteGlobal') === 'true';
     let enPrueba = false;
     let audioAutorizado = false;
 
-    document.addEventListener('click', () => {
-        if (!audioAutorizado) {
-            audioAutorizado = true;
-            Object.values(AUDIOS).forEach(a => {
-                a.play().then(() => { a.pause(); a.currentTime = 0; }).catch(() => {});
-            });
-        }
-    }, { once: true });
+    function desbloquearAudio(audioObj) {
+        if (audioAutorizado) return;
+        audioAutorizado = true;
+        audioObj.play().then(() => {
+            audioObj.pause();
+            audioObj.currentTime = 0;
+        }).catch(() => {});
+    }
+
+    document.addEventListener('click', () => desbloquearAudio(sonidoAlerta), { once: true });
 
     function detenerSonido() {
         sonidoAlerta.pause();
         sonidoAlerta.currentTime = 0;
+        const btnPlay = document.getElementById('btn-test-play');
+        if (btnPlay) btnPlay.textContent = '▶';
     }
 
     // =========================================================
     // LOG
     // =========================================================
     let logEntradas = [];
+    let logDirty = false;
+    let logTabActiva = false;
 
     function timestamp() {
         const now = new Date();
         const fecha = now.toLocaleDateString('es-VE', { day: '2-digit', month: '2-digit', year: 'numeric' });
-        const hora = now.toLocaleTimeString('es-VE', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        const hora = now.toLocaleTimeString('es-VE', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
         return `${fecha} ${hora}`;
     }
 
     function registrarLog(tipo, nodo, datos) {
         logEntradas.unshift({ tipo, nodo, datos, ts: timestamp() });
-        if (logEntradas.length > 2000) logEntradas.splice(2000);
-        renderizarLog();
+        if (logEntradas.length > 2000) logEntradas.length = 2000;
+        logDirty = true;
+    }
+
+    function descargarArchivo(contenido, nombreArchivo, mimeType) {
+        const blob = new Blob([contenido], { type: mimeType });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = nombreArchivo;
+        a.click();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
     }
 
     function exportarLog() {
         const lineas = [`OLT: ${oltActual} - LOG DE EVENTOS`, `Exportado: ${timestamp()}`, '─'.repeat(80)];
         logEntradas.forEach(e => {
             const b = `[${e.ts}] ${e.nodo}`;
-            if (e.tipo === 'inicial')        lineas.push(`${b} | INICIO     | ON:${e.datos.on} OFF:${e.datos.off} (${e.datos.pDown}%) | TOT: ${e.datos.total} (${e.datos.zona} | ${e.datos.op})`);
-            if (e.tipo === 'inicial_alarma') lineas.push(`${b} | INI_ALARM  | ON:${e.datos.on} OFF:${e.datos.off} (${e.datos.pDown}%) | TOT: ${e.datos.total} (${e.datos.zona} | ${e.datos.op})`);
-            if (e.tipo === 'nueva_alarma')   lineas.push(`${b} | ALARMA     | Antes:ON:${e.datos.onPrev||0} OFF:${e.datos.offPrev||0} (${e.datos.pDownPrev||0}%) -> Ahora:ON:${e.datos.on} OFF:${e.datos.off} (${e.datos.pDown}%) | TOT: ${e.datos.total}`);
-            if (e.tipo === 'empeora')        lineas.push(`${b} | EMPEORA    | Antes:ON:${e.datos.onAntes} OFF:${e.datos.offAntes} (${e.datos.pDownAntes||0}%) -> Ahora:ON:${e.datos.on} OFF:${e.datos.off} (${e.datos.pDown}%) | TOT: ${e.datos.total}`);
-            if (e.tipo === 'mejora')         lineas.push(`${b} | MEJORA     | Antes:ON:${e.datos.onAntes} OFF:${e.datos.offAntes} (${e.datos.pDownAntes||0}%) -> Ahora:ON:${e.datos.on} OFF:${e.datos.off} (${e.datos.pDown}%) | TOT: ${e.datos.total}`);
-            if (e.tipo === 'recuperado')     lineas.push(`${b} | RECUPERA   | Antes: ON:${e.datos.onAntes} OFF:${e.datos.offAntes} (${e.datos.pDownAntes}%) -> Ahora: ON:${e.datos.onActual} OFF:${e.datos.offActual} (${e.datos.pDownActual}%) | TOT: ${e.datos.total}`);
+            if (e.tipo === 'inicial')      lineas.push(`${b} | INICIO     | ON:${e.datos.on} OFF:${e.datos.off} (${e.datos.pDown}%) | TOT: ${e.datos.total} (${e.datos.zona} | ${e.datos.op})`);
+            if (e.tipo === 'nueva_alarma') lineas.push(`${b} | ALARMA     | Antes:ON:${e.datos.onPrev||0} OFF:${e.datos.offPrev||0} (${e.datos.pDownPrev||0}%) -> Ahora:ON:${e.datos.on} OFF:${e.datos.off} (${e.datos.pDown}%) | TOT: ${e.datos.total}`);
+            if (e.tipo === 'empeora')      lineas.push(`${b} | EMPEORA    | Antes:ON:${e.datos.onAntes} OFF:${e.datos.offAntes} (${e.datos.pDownAntes||0}%) -> Ahora:ON:${e.datos.on} OFF:${e.datos.off} (${e.datos.pDown}%) | TOT: ${e.datos.total}`);
+            if (e.tipo === 'mejora')       lineas.push(`${b} | MEJORA     | Antes:ON:${e.datos.onAntes} OFF:${e.datos.offAntes} (${e.datos.pDownAntes||0}%) -> Ahora:ON:${e.datos.on} OFF:${e.datos.off} (${e.datos.pDown}%) | TOT: ${e.datos.total}`);
+            if (e.tipo === 'recuperado')   lineas.push(`${b} | RECUPERA   | Antes: ON:${e.datos.onAntes} OFF:${e.datos.offAntes} (${e.datos.pDownAntes}%) -> Ahora: ON:${e.datos.onActual} OFF:${e.datos.offActual} (${e.datos.pDownActual}%) | TOT: ${e.datos.total}`);
         });
-        const blob = new Blob([lineas.join('\n')], { type: 'text/plain' });
-        const a = document.createElement('a');
-        a.href = URL.createObjectURL(blob);
-        a.download = `log_${oltActual}_${new Date().toISOString().slice(0, 10)}.txt`;
-        a.click();
+        descargarArchivo(lineas.join('\n'), `log_${oltActual}_${new Date().toISOString().slice(0, 10)}.txt`, 'text/plain');
     }
 
     function exportarCSV() {
-        const ESTATUS = { inicial: 'INICIO', inicial_alarma: 'INICIO_ALARMADO', nueva_alarma: 'ALARMA', empeora: 'EMPEORA', mejora: 'MEJORA', recuperado: 'RECUPERADO' };
+        const ESTATUS = { inicial: 'INICIO', nueva_alarma: 'ALARMA', empeora: 'EMPEORA', mejora: 'MEJORA', recuperado: 'RECUPERADO' };
         const esc = v => `"${String(v).replace(/"/g, '""')}"`;
         const enc = ['Fecha', 'Hora', 'OLT', 'Nodo', 'Ubicacion', 'Operadora', 'Estatus', 'ON Ant', 'OFF Ant', '% Ant', 'ON Act', 'OFF Act', '% Act', 'TOT'];
         const filas = logEntradas.map(e => {
-            const [fecha, hora] = e.ts.split(' ');
+            const [fecha = '', hora = ''] = e.ts.split(' ');
             let oA = '', oF = '', pA = '', nA = '', nF = '', pN = '', total = '';
-            if (e.tipo === 'inicial' || e.tipo === 'inicial_alarma') {
+            if (e.tipo === 'inicial') {
                 nA = e.datos.on; nF = e.datos.off; pN = `${e.datos.pDown}%`; total = e.datos.total;
             } else if (e.tipo === 'nueva_alarma') {
                 oA = e.datos.onPrev||0; oF = e.datos.offPrev||0; pA = `${e.datos.pDownPrev||0}%`;
@@ -308,36 +417,34 @@
             }
             return [esc(fecha), esc(hora), esc(oltActual), esc(e.nodo), esc(e.datos.zona||''), esc(e.datos.op||''), esc(ESTATUS[e.tipo]||e.tipo), oA, oF, esc(pA), nA, nF, esc(pN), esc(total)].join(',');
         });
-        const blob = new Blob(['\uFEFF' + [enc.join(','), ...filas].join('\n')], { type: 'text/csv;charset=utf-8;' });
-        const a = document.createElement('a');
-        a.href = URL.createObjectURL(blob);
-        a.download = `log_${oltActual}_${new Date().toISOString().slice(0, 10)}.csv`;
-        a.click();
+        descargarArchivo('\uFEFF' + [enc.join(','), ...filas].join('\n'), `log_${oltActual}_${new Date().toISOString().slice(0, 10)}.csv`, 'text/csv;charset=utf-8;');
     }
 
     function renderizarLog() {
         const contenedor = document.getElementById('log-list');
         if (!contenedor) return;
+        logDirty = false;
+
         if (logEntradas.length === 0) {
             contenedor.innerHTML = '<div style="color:#aaa;text-align:center;padding:20px;font-size:11px;">Sin eventos registrados.</div>';
             return;
         }
-        const colores = { inicial: '#555', inicial_alarma: '#ed5565', nueva_alarma: '#ed5565', empeora: '#e67e22', mejora: '#f1c40f', recuperado: '#1ab394' };
-        const iconos  = { inicial: '📋', inicial_alarma: '🔴', nueva_alarma: '🔴', empeora: '📉', mejora: '📈', recuperado: '✅' };
-        const labels  = { inicial: 'INICIO', inicial_alarma: 'INICIO (ALARMADO)', nueva_alarma: 'ALARMA', empeora: 'EMPEORA', mejora: 'MEJORA', recuperado: 'RECUPERADO' };
+        const colores = { inicial: '#555', nueva_alarma: '#ed5565', empeora: '#e67e22', mejora: '#f1c40f', recuperado: '#1ab394' };
+        const iconos  = { inicial: '📋', nueva_alarma: '🔴', empeora: '📉', mejora: '📈', recuperado: '✅' };
+        const labels  = { inicial: 'INICIO', nueva_alarma: 'ALARMA', empeora: 'EMPEORA', mejora: 'MEJORA', recuperado: 'RECUPERADO' };
 
         const entradasFiltradas = logBusqueda
             ? logEntradas.filter(e => e.nodo.toLowerCase().includes(logBusqueda) || (e.datos.zona || '').toLowerCase().includes(logBusqueda))
             : logEntradas;
 
         if (!entradasFiltradas.length) {
-            contenedor.innerHTML = `<div style="color:#aaa;text-align:center;padding:20px;font-size:11px;">Sin resultados para "<b>${logBusqueda}</b>"</div>`;
+            contenedor.innerHTML = `<div style="color:#aaa;text-align:center;padding:20px;font-size:11px;">Sin resultados para "<b>${escapeHtml(logBusqueda)}</b>"</div>`;
             return;
         }
 
         contenedor.innerHTML = entradasFiltradas.map(e => {
             let detalle = '';
-            if (e.tipo === 'inicial' || e.tipo === 'inicial_alarma') {
+            if (e.tipo === 'inicial') {
                 detalle = `ON: <b>${e.datos.on}</b> | OFF: <b>${e.datos.off}</b> (${e.datos.pDown}%) | TOT: ${e.datos.total}`;
             } else if (e.tipo === 'nueva_alarma') {
                 detalle = `Antes: ON:${e.datos.onPrev||0} OFF:${e.datos.offPrev||0} (${e.datos.pDownPrev||0}%) → <b>Ahora: ON:${e.datos.on} OFF:${e.datos.off} (${e.datos.pDown}%)</b>`;
@@ -346,15 +453,16 @@
             } else if (e.tipo === 'recuperado') {
                 detalle = `Antes: ON:${e.datos.onAntes} OFF:${e.datos.offAntes} (${e.datos.pDownAntes}%) → <b>Ahora: ON:${e.datos.onActual} OFF:${e.datos.offActual} (${e.datos.pDownActual}%)</b>`;
             }
-            const zona = e.datos.zona || '';
-            const op   = e.datos.op   || '';
+            const zona = escapeHtml(e.datos.zona || '');
+            const op   = escapeHtml(e.datos.op || '');
+            const color = colores[e.tipo] || '#555';
             return `
-                <div style="margin-bottom:7px;padding:7px 8px;border-left:4px solid ${colores[e.tipo]};background:rgba(255,255,255,0.04);border-radius:0 4px 4px 0;">
+                <div style="margin-bottom:7px;padding:7px 8px;border-left:4px solid ${color};background:rgba(255,255,255,0.04);border-radius:0 4px 4px 0;">
                     <div style="display:flex;justify-content:space-between;align-items:center;">
-                        <span style="color:${colores[e.tipo]};font-size:10px;font-weight:bold;">${iconos[e.tipo]} ${labels[e.tipo]}</span>
-                        <span style="color:#555;font-size:9px;">${e.ts}</span>
+                        <span style="color:${color};font-size:10px;font-weight:bold;">${iconos[e.tipo] || ''} ${labels[e.tipo] || escapeHtml(e.tipo)}</span>
+                        <span style="color:#555;font-size:9px;">${escapeHtml(e.ts)}</span>
                     </div>
-                    <div style="color:#ccc;font-size:12px;font-weight:bold;margin:2px 0;">${e.nodo}</div>
+                    <div style="color:#ccc;font-size:12px;font-weight:bold;margin:2px 0;">${escapeHtml(e.nodo)}</div>
                     ${zona || op ? `<div style="color:#888;font-size:10px;">📍${zona} | 🏢${op}</div>` : ''}
                     <div style="color:#aaa;font-size:10px;">${detalle}</div>
                 </div>`;
@@ -362,7 +470,7 @@
     }
 
     // =========================================================
-    // FAVICON
+    // FAVICON Y TÍTULO
     // =========================================================
     let faviconEl = document.querySelector("link[rel~='icon']");
     if (!faviconEl) {
@@ -376,10 +484,20 @@
     const faviconCtx = faviconCanvas.getContext('2d');
 
     function actualizarPestana(oltName, totalCriticos, hayNuevos) {
-        if (ultimoEstadoPestana.criticos === totalCriticos && ultimoEstadoPestana.hayNuevos === hayNuevos) return;
-        ultimoEstadoPestana.criticos = totalCriticos;
-        ultimoEstadoPestana.hayNuevos = hayNuevos;
-        document.title = totalCriticos > 0 ? `${hayNuevos ? '🆕' : ''} ${oltName}` : `✅ ${oltName}`;
+        if (
+            ultimoEstadoPestana.oltName === oltName &&
+            ultimoEstadoPestana.criticos === totalCriticos &&
+            ultimoEstadoPestana.hayNuevos === hayNuevos
+        ) {
+            return;
+        }
+        ultimoEstadoPestana = { oltName, criticos: totalCriticos, hayNuevos };
+
+        const labelOlt = oltName || 'OLT';
+        document.title = totalCriticos > 0
+            ? `${hayNuevos ? '🆕 ' : ''}(${totalCriticos}) ${labelOlt}`
+            : `✅ ${labelOlt}`;
+
         const color = totalCriticos > 0 ? (hayNuevos ? '#e74c3c' : '#a93226') : '#1ab394';
         faviconCtx.clearRect(0, 0, 32, 32);
         faviconCtx.beginPath();
@@ -389,8 +507,10 @@
         faviconCtx.fillStyle = '#ffffff';
         faviconCtx.textAlign = 'center';
         faviconCtx.textBaseline = 'middle';
+
         if (totalCriticos > 0) {
-            document.title = `(${totalCriticos}) ${oltName}`;
+            faviconCtx.font = totalCriticos > 9 ? 'bold 14px sans-serif' : 'bold 18px sans-serif';
+            faviconCtx.fillText(totalCriticos > 99 ? '99+' : String(totalCriticos), 16, 17);
         } else {
             faviconCtx.font = 'bold 20px sans-serif';
             faviconCtx.fillText('✓', 16, 17);
@@ -402,7 +522,7 @@
     // CSS
     // =========================================================
     const style = document.createElement('style');
-    style.innerHTML = `
+    style.textContent = `
         @keyframes pulseACS {
             0%, 100% { box-shadow: inset 0 0 0px #fff; background-color: #a93226; }
             50% { box-shadow: inset 0 0 20px #fff; background-color: #ed5565; border:1px solid #fff; }
@@ -451,7 +571,7 @@
         .zoom-btn {
             background:#333; color:#aaa; border:1px solid #555; border-radius:3px;
             padding:3px 6px; font-size:10px; font-weight:bold; cursor:pointer;
-            font-family:'Google Sans'; flex:1; text-align:center; transition:background 0.2s;
+            font-family:'Google Sans', sans-serif; flex:1; text-align:center; transition:background 0.2s;
         }
         .zoom-btn:hover { background:#444; }
         .zoom-btn.active { background:#f1c40f; color:#111; border-color:#e67e22; }
@@ -490,7 +610,7 @@
                     🚨 <span id="alert-count" style="background:#ed5565;color:white;border-radius:10px;padding:0 8px;font-size:11px;">0</span>
                 </span>
                 <div style="display:flex;align-items:center;gap:5px;">
-                    <span id="btn-flotante" title="Modo flotante" onclick="event.stopPropagation()">⧉</span>
+                    <span id="btn-flotante" title="Modo flotante">⧉</span>
                     <span id="toggle-btn" style="font-size:16px;">+</span>
                 </div>
             </div>
@@ -575,8 +695,8 @@
 
         // --- Máquina de estados del panel ---
         function aplicarEstado(estado) {
-            const content    = document.getElementById('alert-content');
-            const btnToggle  = document.getElementById('toggle-btn');
+            const content     = document.getElementById('alert-content');
+            const btnToggle   = document.getElementById('toggle-btn');
             const btnFlotante = document.getElementById('btn-flotante');
 
             if (estado === 'flotante') {
@@ -599,31 +719,45 @@
         aplicarEstado('minimizado');
 
         // --- Controles ---
-        document.getElementById('umbral-valor').value = umbralValor;
-        document.getElementById('umbral-tipo').value  = umbralTipo;
+        const inputUmbral = document.getElementById('umbral-valor');
+        inputUmbral.value = umbralValor;
+        document.getElementById('umbral-tipo').value = umbralTipo;
 
         const actualizarConfiguracion = () => {
-            umbralValor = parseFloat(document.getElementById('umbral-valor').value) || 0;
-            umbralTipo  = document.getElementById('umbral-tipo').value;
+            const val = parseFloat(inputUmbral.value);
+            umbralValor = Number.isFinite(val) && val >= 1 ? val : 1;
+            inputUmbral.value = umbralValor;
+            umbralTipo = document.getElementById('umbral-tipo').value;
             localStorage.setItem('oltUmbralValor', umbralValor);
-            localStorage.setItem('oltUmbralTipo',  umbralTipo);
+            localStorage.setItem('oltUmbralTipo', umbralTipo);
+
+            oltSessionId++;
+            oltAbortController.abort();
+            oltAbortController = new AbortController();
+
             modoCargaInicial = true;
             registroNodos.clear();
             memoriaRedGlobal.clear();
+            resultadosRCA.clear();
             logEntradas = [];
-            document.getElementById('log-list').innerHTML = '';
+            logDirty = true;
+            ultimoHTMLRenderizado = '';
+            if (logTabActiva) renderizarLog();
             actualizarPestana(oltActual, 0, false);
+            procesarNodos();
         };
-        document.getElementById('umbral-valor').addEventListener('change', actualizarConfiguracion);
+        inputUmbral.addEventListener('change', actualizarConfiguracion);
         document.getElementById('umbral-tipo').addEventListener('change', actualizarConfiguracion);
 
         const selectAlarma = document.getElementById('selector-alarma');
-        selectAlarma.value = alarmaGuardada in AUDIOS ? alarmaGuardada : 'dosimeter';
-        selectAlarma.addEventListener('change', function() {
+        selectAlarma.value = alarmaGuardada in AUDIO_URLS ? alarmaGuardada : 'dosimeter';
+        selectAlarma.addEventListener('change', function () {
             detenerSonido();
-            sonidoAlerta = AUDIOS[this.value] || AUDIOS.alarm;
+            sonidoAlerta = getAudio(this.value);
             localStorage.setItem('oltAlarmaSeleccionada', this.value);
-            if ([...registroNodos.values()].some(d => !d.reconocido) && !silenciado && !muteGlobal) sonidoAlerta.play().catch(() => {});
+            if ([...registroNodos.values()].some(d => !d.reconocido) && !silenciado && !muteGlobal) {
+                sonidoAlerta.play().catch(() => {});
+            }
         });
 
         document.getElementById('btn-test-play').onclick = () => {
@@ -632,12 +766,15 @@
             sonidoAlerta.play().catch(() => {
                 const statusEl = document.getElementById('mute-status');
                 if (statusEl) {
-                    const orig = statusEl.innerHTML;
-                    statusEl.style.display = 'block'; statusEl.style.color = '#ed5565';
-                    statusEl.innerHTML = '❌ Error al reproducir audio';
+                    const orig = statusEl.textContent;
+                    statusEl.style.display = 'block';
+                    statusEl.style.color = '#ed5565';
+                    statusEl.textContent = '❌ Error al reproducir audio';
                     setTimeout(() => {
-                        if (statusEl.innerHTML === '❌ Error al reproducir audio') {
-                            statusEl.style.display = 'none'; statusEl.innerHTML = orig;
+                        if (statusEl.textContent === '❌ Error al reproducir audio') {
+                            statusEl.style.display = 'none';
+                            statusEl.style.color = '';
+                            statusEl.textContent = orig;
                         }
                     }, 3000);
                 }
@@ -647,17 +784,20 @@
         document.getElementById('btn-test-stop').onclick = () => {
             enPrueba = false;
             detenerSonido();
-            document.getElementById('btn-test-play').textContent = '▶';
         };
 
-        document.getElementById('filtro-op').addEventListener('change', function() {
-            filtroOp = this.value; localStorage.setItem('oltFiltroOp', filtroOp);
+        const selectOp = document.getElementById('filtro-op');
+        selectOp.addEventListener('change', function () {
+            filtroOp = this.value;
+            localStorage.setItem('oltFiltroOp', filtroOp);
+            procesarNodos();
         });
-        document.getElementById('filtro-op').value = filtroOp;
+        selectOp.value = filtroOp;
 
         document.getElementById('btn-marcar-todos').onclick = () => {
-            for (let data of registroNodos.values()) data.reconocido = true;
-            enPrueba = false; detenerSonido();
+            for (const data of registroNodos.values()) data.reconocido = true;
+            enPrueba = false;
+            detenerSonido();
             procesarNodos();
         };
 
@@ -676,14 +816,17 @@
             statusEl.classList.add('mute-status-text');
             if (muteGlobal) {
                 btnSil.classList.add('mute-permanente');
-                statusEl.style.display = 'block'; statusEl.textContent = '🔒 Silencio permanente activo';
+                statusEl.style.display = 'block';
+                statusEl.textContent = '🔒 Silencio permanente activo';
             } else if (silenciado && muteExpiraEn) {
                 btnSil.classList.add('mute-temporal');
                 statusEl.style.display = 'block';
-                statusEl.textContent = `⏱ Silenciado ${Math.ceil((muteExpiraEn - Date.now()) / 60000)}min restantes`;
+                const mins = Math.max(1, Math.ceil((muteExpiraEn - Date.now()) / 60000));
+                statusEl.textContent = `⏱ Silenciado ${mins}min restantes`;
             } else {
                 btnSil.classList.add('mute-off');
-                statusEl.style.display = 'none'; statusEl.textContent = '';
+                statusEl.style.display = 'none';
+                statusEl.textContent = '';
             }
         }
 
@@ -709,17 +852,29 @@
 
             if (muteGlobal) {
                 muteGlobal = false; silenciado = false; muteExpiraEn = null;
-                localStorage.setItem('oltMuteGlobal', 'false'); aplicarMuteEstado(); return;
+                localStorage.setItem('oltMuteGlobal', 'false');
+                aplicarMuteEstado();
+                return;
             }
             if (silenciado && muteExpiraEn) {
-                clearTimeout(timerMuteTemporal); timerMuteTemporal = null;
-                silenciado = false; muteExpiraEn = null; aplicarMuteEstado(); return;
+                clearTimeout(timerMuteTemporal);
+                timerMuteTemporal = null;
+                silenciado = false;
+                muteExpiraEn = null;
+                aplicarMuteEstado();
+                return;
             }
             const DURACION_MS = 60 * 60 * 1000;
-            muteExpiraEn = Date.now() + DURACION_MS; silenciado = true;
-            enPrueba = false; detenerSonido();
+            muteExpiraEn = Date.now() + DURACION_MS;
+            silenciado = true;
+            enPrueba = false;
+            detenerSonido();
             clearTimeout(timerMuteTemporal);
-            timerMuteTemporal = setTimeout(() => { silenciado = false; muteExpiraEn = null; aplicarMuteEstado(); }, DURACION_MS);
+            timerMuteTemporal = setTimeout(() => {
+                silenciado = false;
+                muteExpiraEn = null;
+                aplicarMuteEstado();
+            }, DURACION_MS);
             aplicarMuteEstado();
         });
 
@@ -730,23 +885,26 @@
 
         // --- Tabs ---
         document.getElementById('tab-alarmas').onclick = () => {
+            logTabActiva = false;
             document.getElementById('vista-alarmas').style.display = 'block';
             document.getElementById('vista-log').style.display = 'none';
             document.getElementById('tab-alarmas').className = 'tab-btn tab-active';
             document.getElementById('tab-log').className     = 'tab-btn tab-inactive';
         };
         document.getElementById('tab-log').onclick = () => {
+            logTabActiva = true;
             document.getElementById('vista-alarmas').style.display = 'none';
             document.getElementById('vista-log').style.display = 'block';
             document.getElementById('tab-alarmas').className = 'tab-btn tab-inactive';
             document.getElementById('tab-log').className     = 'tab-btn tab-active';
-            renderizarLog();
+            if (logDirty) renderizarLog();
         };
-        document.getElementById('log-busqueda').addEventListener('input', function() {
-            logBusqueda = this.value.trim().toLowerCase(); renderizarLog();
+        document.getElementById('log-busqueda').addEventListener('input', function () {
+            logBusqueda = this.value.trim().toLowerCase();
+            renderizarLog();
         });
 
-        document.getElementById('panel-header').onclick = function(e) {
+        document.getElementById('panel-header').onclick = function (e) {
             if (e.target.id === 'btn-flotante') return;
             if (panelState === 'minimizado') {
                 aplicarEstado(modoPreferido);
@@ -767,6 +925,26 @@
         });
     }
 
+    function updateLabelCell(celdaPort, labelPrincipal, pDown, pUp, stateKey, bgColor, blink) {
+        if (!labelPrincipal) return;
+        const fullKey = `${pDown}|${pUp}|${stateKey}`;
+        if (labelPrincipal.dataset.nocState === fullKey) return;
+        labelPrincipal.dataset.nocState = fullKey;
+
+        labelPrincipal.innerHTML = `<div style="line-height:1.1;"><b style="font-size:11px;">${pDown}% DN</b><br><span style="font-size:9px;">${pUp}% UP</span></div>`;
+        labelPrincipal.className = blink ? 'label celda-acs-blink' : 'label';
+        labelPrincipal.style.cssText = blink
+            ? 'display:inline-block!important;width:68px!important;color:white!important;border-radius:4px;text-align:center;'
+            : `display:inline-block!important;width:68px!important;background-color:${bgColor}!important;color:white!important;border-radius:4px;text-align:center;border:1px solid rgba(255,255,255,0.05);`;
+
+        const etiquetas = celdaPort.querySelectorAll('.gpon-util .label');
+        for (let j = 1; j < etiquetas.length; j++) {
+            if (!etiquetas[j].classList.contains('label-success') && etiquetas[j].style.display !== 'none') {
+                etiquetas[j].style.display = 'none';
+            }
+        }
+    }
+
     // =========================================================
     // LOOP PRINCIPAL
     // =========================================================
@@ -774,16 +952,26 @@
         if (!window.location.href.includes('/monitoring/olt/')) return;
         crearPanel();
 
-        const oltName = document.querySelector('.olt-monitoring-details-olt-title')?.innerText.trim() || "";
+        const oltName = document.querySelector('.olt-monitoring-details-olt-title')?.innerText.trim() || '';
         if (oltName && oltName !== oltActual) {
-            oltActual = oltName; modoCargaInicial = true;
-            logEntradas = []; registroNodos.clear(); memoriaRedGlobal.clear();
+            oltActual = oltName;
+            oltSessionId++;
+            oltAbortController.abort();
+            oltAbortController = new AbortController();
+
+            modoCargaInicial = true;
+            logEntradas = [];
+            logDirty = true;
+            registroNodos.clear();
+            memoriaRedGlobal.clear();
+            resultadosRCA.clear();
+            ultimoHTMLRenderizado = '';
+            if (!enPrueba) detenerSonido();
         }
 
-        const filas = document.querySelectorAll('tr');
-
+        const filas = document.querySelectorAll('tbody tr');
         let tablaCargada = false;
-        for (let fila of filas) {
+        for (const fila of filas) {
             const celdas = fila.querySelectorAll('td');
             if (celdas.length >= 2) {
                 const slotStr = celdas[0].querySelector('strong')?.innerText.trim();
@@ -797,13 +985,15 @@
             if (listContainer && ultimoHTMLRenderizado !== msgCarga) {
                 listContainer.innerHTML = msgCarga;
                 ultimoHTMLRenderizado = msgCarga;
-                document.title = `⏳ Cargando ${oltActual}...`;
+                document.title = `⏳ Cargando ${oltActual || 'OLT'}...`;
             }
             return;
         }
 
         const criticosActuales = [];
         let hayNovedadesParaAlarma = false;
+        const matchOlt = window.location.pathname.match(/\/olt\/(\d+)/);
+        const oltIdUrl = matchOlt ? matchOlt[1] : null;
 
         filas.forEach(fila => {
             const celdas = fila.querySelectorAll('td');
@@ -820,59 +1010,46 @@
                 if (!matchPuerto) continue;
 
                 const portStr = matchPuerto[1].padStart(2, '0');
-                const on  = parseInt(celdaPort.querySelector('.label-green')?.innerText)  || 0;
-                const off = parseInt(celdaPort.querySelector('.label-danger')?.innerText) || 0;
+                const on  = parseInt(celdaPort.querySelector('.label-green')?.innerText, 10)  || 0;
+                const off = parseInt(celdaPort.querySelector('.label-danger')?.innerText, 10) || 0;
                 const total = on + off;
                 if (total === 0) continue;
 
-                const pDown = ((off / total) * 100).toFixed(1);
-                const pUp   = ((on  / total) * 100).toFixed(1);
+                const downNum = (off / total) * 100;
+                const pDown = downNum.toFixed(1);
+                const pUp   = ((on / total) * 100).toFixed(1);
                 const idNodo = `${oltName}${slotStr}${portStr}A`;
                 const superaUmbral = umbralTipo === 'porcentaje' ? parseFloat(pDown) >= umbralValor : off >= umbralValor;
 
-                const info      = DB_NODOS[idNodo] || { op: "---", zona: "S/I" };
+                const info      = DB_NODOS[idNodo] || { op: '---', zona: 'S/I' };
                 const datosNodo = { total, on, off, pDown, pUp, zona: info.zona, op: info.op };
                 const memPrevia = memoriaRedGlobal.get(idNodo);
                 const comoInicial = modoCargaInicial || !memPrevia;
 
-                if (!comoInicial && memPrevia && (memPrevia.off !== off || memPrevia.on !== on)) {
-                    resultadosRCA.delete(idNodo);
-                }
-
-                const etiquetas = celdaPort.querySelectorAll('.gpon-util .label');
-                let labelPrincipal = null;
-                if (etiquetas.length > 0) {
-                    labelPrincipal = etiquetas[0];
-                    labelPrincipal.innerHTML = `<div style="line-height:1.1;"><b style="font-size:11px;">${pDown}% DN</b><br><span style="font-size:9px;">${pUp}% UP</span></div>`;
-                    for (let j = 1; j < etiquetas.length; j++) {
-                        if (!etiquetas[j].classList.contains('label-success')) etiquetas[j].style.display = 'none';
-                    }
-                }
+                const labelPrincipal = celdaPort.querySelector('.gpon-util .label');
 
                 if (superaUmbral) {
                     const rcaState = resultadosRCA.get(idNodo);
-                    if (!rcaState || (rcaState.status === 'error' && (Date.now() - rcaState.ts) > 30000)) {
-                        const matchOlt = window.location.pathname.match(/\/olt\/(\d+)/);
-                        if (matchOlt) {
-                            // Ejecutar RCA en background sin bloquear iteración
-                            ejecutarRCA(idNodo, matchOlt[1], parseInt(slotStr, 10), parseInt(portStr, 10));
-                        }
+                    const cambioConteo = rcaState && (rcaState.off !== off || rcaState.on !== on);
+                    const errorExpirado = rcaState && rcaState.status === 'error' && (Date.now() - rcaState.ts) > 30000;
+                    const debeConsultarRca =
+                        !rcaState ||
+                        (rcaState.status !== 'loading' && (cambioConteo || errorExpirado));
+
+                    if (debeConsultarRca && oltIdUrl) {
+                        ejecutarRCA(idNodo, oltIdUrl, parseInt(slotStr, 10), parseInt(portStr, 10), off, on);
                     }
 
-                    const RCA_VALIDAS = ['LOS', 'LOSi', 'LOFi', 'link-down'];
-                    const rcaPendiente = !rcaState || rcaState.status === 'loading';
-                    const rcaValido = rcaState && rcaState.status === 'done' && RCA_VALIDAS.includes(rcaState.dominante);
-                    const rcaIgnorado = rcaState && rcaState.status === 'done' && !rcaValido;
+                    const rcaActual = resultadosRCA.get(idNodo);
+                    const rcaPendiente = !rcaActual || rcaActual.status === 'loading';
+                    const rcaValido = rcaActual && rcaActual.status === 'done' && RCA_VALIDAS.has(rcaActual.dominante);
+                    const rcaIgnorado = rcaActual && rcaActual.status === 'done' && !rcaValido;
 
                     if (!registroNodos.has(idNodo)) {
-                        const offPrev   = memPrevia ? memPrevia.off   : 0;
-                        const onPrev    = memPrevia ? memPrevia.on    : total;
-                        const pDownPrev = memPrevia ? memPrevia.pDown : '0';
-
                         registroNodos.set(idNodo, {
                             origen:        comoInicial ? 'inicial' : 'nuevo',
-                            reconocido:    comoInicial || rcaIgnorado, // Ignorados no titilan
-                            notificado:    false, // ¿Ya se alertó al log y con sonido?
+                            reconocido:    comoInicial || rcaIgnorado,
+                            notificado:    comoInicial,
                             timestamp:     Date.now(),
                             offAnterior:   off,
                             onAnterior:    on,
@@ -882,7 +1059,6 @@
 
                         if (comoInicial) {
                             registrarLog('inicial', idNodo, datosNodo);
-                            registroNodos.get(idNodo).notificado = true;
                         }
                     } else {
                         const data = registroNodos.get(idNodo);
@@ -897,38 +1073,31 @@
 
                     const data = registroNodos.get(idNodo);
 
-                    // Disparar alarma solo cuando el RCA confirma que es válido (y no ha sido notificado)
-                    if (rcaValido && !data.notificado && !comoInicial && data.origen === 'nuevo') {
+                    if (rcaValido && !data.notificado && data.origen === 'nuevo') {
                         data.notificado = true;
                         hayNovedadesParaAlarma = true;
-                        const prev = memoriaRedGlobal.get(idNodo) || {};
+                        const prev = memPrevia || {};
                         registrarLog('nueva_alarma', idNodo, { ...datosNodo, offPrev: prev.off, onPrev: prev.on, pDownPrev: prev.pDown });
                     }
 
                     if (rcaIgnorado) {
-                        data.reconocido = true; // Silenciar visualmente
+                        data.reconocido = true;
                     }
 
                     const esNuevoParaPanel = (data.origen === 'nuevo' && !data.reconocido && rcaValido);
 
-                    if (labelPrincipal) {
-                        if (rcaIgnorado) {
-                            labelPrincipal.className = "label";
-                            labelPrincipal.style.cssText = `display:inline-block!important;width:68px!important;background-color:#7f8c8d!important;color:white!important;border-radius:4px;text-align:center;border:1px solid rgba(255,255,255,0.05);`;
-                        } else if (rcaPendiente) {
-                            labelPrincipal.className = "label";
-                            labelPrincipal.style.cssText = `display:inline-block!important;width:68px!important;background-color:#e67e22!important;color:white!important;border-radius:4px;text-align:center;border:1px solid rgba(255,255,255,0.05);`;
-                        } else {
-                            labelPrincipal.className = esNuevoParaPanel ? "label celda-acs-blink" : "label";
-                            labelPrincipal.style.cssText = esNuevoParaPanel
-                                ? `display:inline-block!important;width:68px!important;color:white!important;border-radius:4px;text-align:center;`
-                                : `display:inline-block!important;width:68px!important;background-color:#a93226!important;color:white!important;border-radius:4px;text-align:center;border:1px solid rgba(255,255,255,0.05);`;
-                        }
+                    if (rcaIgnorado) {
+                        updateLabelCell(celdaPort, labelPrincipal, pDown, pUp, 'ign', '#7f8c8d', false);
+                    } else if (rcaPendiente) {
+                        updateLabelCell(celdaPort, labelPrincipal, pDown, pUp, 'pend', '#e67e22', false);
+                    } else if (esNuevoParaPanel) {
+                        updateLabelCell(celdaPort, labelPrincipal, pDown, pUp, 'blink', '', true);
+                    } else {
+                        updateLabelCell(celdaPort, labelPrincipal, pDown, pUp, 'crit', '#a93226', false);
                     }
 
                     const borderColor = rcaIgnorado ? '#7f8c8d' : (rcaPendiente ? '#e67e22' : '#a93226');
-                    criticosActuales.push({ id: idNodo, down: pDown, off, total, ...info, esNuevoParaPanel, borderColor });
-
+                    criticosActuales.push({ id: idNodo, down: pDown, downNum, off, total, ...info, esNuevoParaPanel, borderColor });
                 } else {
                     resultadosRCA.delete(idNodo);
                     if (registroNodos.has(idNodo)) {
@@ -942,10 +1111,7 @@
                         }
                         registroNodos.delete(idNodo);
                     }
-                    if (labelPrincipal) {
-                        labelPrincipal.className = "label";
-                        labelPrincipal.style.cssText = `display:inline-block!important;width:68px!important;background-color:#1ab394!important;color:white!important;border-radius:4px;text-align:center;`;
-                    }
+                    updateLabelCell(celdaPort, labelPrincipal, pDown, pUp, 'ok', '#1ab394', false);
                 }
 
                 memoriaRedGlobal.set(idNodo, { off, on, total, pDown });
@@ -957,9 +1123,13 @@
 
         modoCargaInicial = false;
 
+        if (logDirty && logTabActiva) {
+            renderizarLog();
+        }
+
         const selectOp = document.getElementById('filtro-op');
         if (selectOp) {
-            const opsEnOlt = [...new Set(criticosActuales.map(c => c.op).filter(Boolean))].sort();
+            const opsEnOlt = [...new Set(criticosActuales.map(c => c.op).filter(Boolean))];
             if (filtroOp !== 'TODOS' && !opsEnOlt.includes(filtroOp)) opsEnOlt.push(filtroOp);
             opsEnOlt.sort();
             const opcionesActuales = [...selectOp.options].slice(1).map(o => o.value);
@@ -971,7 +1141,8 @@
                     opt.value = op; opt.textContent = op; selectOp.appendChild(opt);
                 });
                 selectOp.value = opsEnOlt.includes(selAnterior) ? selAnterior : 'TODOS';
-                filtroOp = selectOp.value; localStorage.setItem('oltFiltroOp', filtroOp);
+                filtroOp = selectOp.value;
+                localStorage.setItem('oltFiltroOp', filtroOp);
             }
         }
 
@@ -986,40 +1157,36 @@
 
         const listContainer = document.getElementById('alert-list');
         if (listContainer) {
+            const getPrio = (id) => {
+                const dom = resultadosRCA.get(id)?.dominante;
+                if (!dom) return 2;
+                if (RCA_VALIDAS.has(dom)) return 1;
+                if (dom === 'dying-gasp' || dom === 'power-off') return 3;
+                if (dom === 'deactive' || dom === 'SUSPENDED') return 4;
+                return 2;
+            };
+
             const nuevoHTML = criticosFiltrados.length > 0
                 ? criticosFiltrados
                     .sort((a, b) => {
                         if (a.esNuevoParaPanel !== b.esNuevoParaPanel) return a.esNuevoParaPanel ? -1 : 1;
-
-                        function getPrio(id) {
-                            const dom = resultadosRCA.get(id)?.dominante;
-                            if (!dom) return 2; // Pendiente/Inconcluso/OTHER
-                            if (['LOS', 'LOSi', 'LOFi', 'link-down'].includes(dom)) return 1;
-                            if (['dying-gasp', 'power-off'].includes(dom)) return 3;
-                            if (['deactive', 'SUSPENDED'].includes(dom)) return 4;
-                            return 2;
-                        }
-
-                        const prioA = getPrio(a.id);
-                        const prioB = getPrio(b.id);
-
-                        if (prioA !== prioB) return prioA - prioB;
-                        return b.down - a.down;
+                        const prioDiff = getPrio(a.id) - getPrio(b.id);
+                        return prioDiff !== 0 ? prioDiff : b.downNum - a.downNum;
                     })
                     .map(c => `
                         <div class="${c.esNuevoParaPanel ? 'tarjeta-panel-blink' : ''}" style="margin-bottom:10px;padding:9px;border-left:5px solid ${c.esNuevoParaPanel ? '#ed5565' : c.borderColor};background:rgba(255,255,255,0.05);border-radius:0 5px 5px 0;">
                             <div style="display:flex;align-items:center;justify-content:space-between;">
-                                <span style="color:#1ab394;font-weight:900;font-size:14px;letter-spacing:0.5px;">${c.id}</span>
+                                <span style="color:#1ab394;font-weight:900;font-size:14px;letter-spacing:0.5px;">${escapeHtml(c.id)}</span>
                                 ${c.esNuevoParaPanel ? '<span class="badge-nuevo">NUEVO</span>' : ''}
                             </div>
-                            <div style="font-size:10px;color:#ddd;margin:3px 0;">📍 ${c.zona} | 🏢 ${c.op}</div>
+                            <div style="font-size:10px;color:#ddd;margin:3px 0;">📍 ${escapeHtml(c.zona)} | 🏢 ${escapeHtml(c.op)}</div>
                             <div style="margin-top:5px;color:#ed5565;font-size:11px;font-weight:bold;">
                                 ⚠️ ${c.down}% caída | 🔴 OFF:${c.off} | 👥 ${c.total}
                             </div>
-                            ${resultadosRCA.has(c.id) ? `<div style="margin-top:4px;font-size:11px;color:#f1c40f;background:rgba(0,0,0,0.2);padding:4px 6px;border-radius:4px;display:inline-block;letter-spacing:0.3px;">${resultadosRCA.get(c.id).text}</div>` : ''}
+                            ${renderRcaHtml(resultadosRCA.get(c.id))}
                         </div>`).join('')
                 : criticosActuales.length > 0
-                    ? `<div style="color:#aaa;text-align:center;padding:20px;font-size:11px;">Sin alarmas para <b>${filtroOp}</b></div>`
+                    ? `<div style="color:#aaa;text-align:center;padding:20px;font-size:11px;">Sin alarmas para <b>${escapeHtml(filtroOp)}</b></div>`
                     : '<div style="color:#1ab394;text-align:center;padding:20px;font-weight:bold;">SISTEMA OK ✅</div>';
 
             if (ultimoHTMLRenderizado !== nuevoHTML) {
@@ -1038,7 +1205,12 @@
         new Blob([`setInterval(()=>postMessage('tick'),2500)`], { type: 'application/javascript' })
     );
     const worker = new Worker(workerBlobUrl);
-    URL.revokeObjectURL(workerBlobUrl);
-    worker.onmessage = procesarNodos;
-
+    let workerUrlRevoked = false;
+    worker.onmessage = () => {
+        if (!workerUrlRevoked) {
+            workerUrlRevoked = true;
+            URL.revokeObjectURL(workerBlobUrl);
+        }
+        procesarNodos();
+    };
 })();
